@@ -4,42 +4,91 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Interview Tracker Settings</title>
+<meta name="color-scheme" content="light dark">
 <style>
 :root{
-  --bg:#eef1f7; --surface:#ffffff; --text:#141824; --text-dim:#5b6472;
-  --border:#e4e8f0; --accent:#5b5bf0; --accent-text:#ffffff;
-  --good:#0f9d58; --bad:#d1394a; --radius:14px;
+  --bg:#eef1f7; --surface:#ffffff; --surface-2:#f6f7fb; --surface-3:#eef1f7;
+  --text:#141824; --text-dim:#5b6472; --text-faint:#8a93a3;
+  --border:#e4e8f0; --border-strong:#d3d9e4;
+  --accent:#5b5bf0; --accent-text:#ffffff; --accent-weak:#ececff;
+  --ring:rgba(91,91,240,.35);
+  --shadow-sm:0 1px 2px rgba(20,24,36,.06);
+  --shadow:0 4px 16px rgba(20,24,36,.08),0 1px 3px rgba(20,24,36,.05);
+  --good:#0f9d58; --good-bg:#e3f6ec; --bad:#d1394a; --bad-bg:#fde7ea;
+  --radius:14px; --radius-sm:9px;
 }
 [data-theme="dark"]{
-  --bg:#0c0e14; --surface:#161a24; --text:#e8ebf2; --text-dim:#a2acbd; --border:#262c3a; --accent:#7b7bff;
+  --bg:#0c0e14; --surface:#161a24; --surface-2:#1b2030; --surface-3:#232a3d;
+  --text:#e8ebf2; --text-dim:#a2acbd; --text-faint:#6d7688;
+  --border:#262c3a; --border-strong:#333b4d;
+  --accent:#7b7bff; --accent-text:#0c0e14; --accent-weak:#22243f;
+  --ring:rgba(123,123,255,.4);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.4);
+  --shadow:0 8px 28px rgba(0,0,0,.5),0 2px 6px rgba(0,0,0,.35);
+  --good:#4ade80; --good-bg:#123322; --bad:#ff6b7d; --bad-bg:#3a151b;
 }
-*{box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);margin:0;padding:24px}
-.wrap{max-width:720px;margin:0 auto}
-.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px;margin-bottom:16px}
-h1{font-size:1.6rem;margin:0 0 8px}
+*{margin:0;padding:0;box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  background:var(--bg);color:var(--text);min-height:100vh;padding:24px 20px 48px;
+  line-height:1.45;transition:background .2s ease,color .2s ease}
+.wrap{max-width:960px;margin:0 auto}
+.top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:22px;flex-wrap:wrap}
+.top h1{font-size:1.7rem;font-weight:700;letter-spacing:-.02em;display:flex;align-items:center;gap:10px}
+.top .dot{width:10px;height:10px;border-radius:50%;background:var(--good);box-shadow:0 0 0 4px var(--good-bg)}
+.sub{color:var(--text-dim);font-size:.92rem;margin-top:4px}
+.top-actions{display:flex;align-items:center;gap:10px}
+.toggle{display:inline-flex;align-items:center;gap:7px;background:var(--surface);border:1px solid var(--border);
+  color:var(--text-dim);padding:8px 12px;border-radius:999px;cursor:pointer;font-size:.85rem;font-weight:600;
+  box-shadow:var(--shadow-sm);transition:.15s;text-decoration:none}
+.toggle:hover{border-color:var(--border-strong);color:var(--text)}
+.card{max-width:760px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:24px;margin-bottom:16px;box-shadow:var(--shadow)}
+.card h2{font-size:1.2rem;font-weight:700;letter-spacing:-.01em;margin-bottom:6px}
 p{color:var(--text-dim);line-height:1.5}
-label{display:block;font-weight:600;margin:16px 0 8px}
-input[type=email],input[type=time]{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;font-size:1rem;background:transparent;color:var(--text)}
-.row{display:flex;gap:10px;align-items:center;margin-bottom:10px}
+label{display:block;font-weight:650;font-size:.8rem;color:var(--text-dim);text-transform:uppercase;
+  letter-spacing:.03em;margin:20px 0 7px}
+input[type=email],input[type=time]{width:100%;padding:10px 12px;border:1px solid var(--border-strong);
+  border-radius:var(--radius-sm);font-size:.95rem;background:var(--surface-2);color:var(--text);font-family:inherit}
+input[type=email]:focus,input[type=time]:focus{outline:none;border-color:var(--accent);
+  box-shadow:0 0 0 3px var(--ring);background:var(--surface)}
+.row{display:flex;gap:10px;align-items:center;margin-bottom:10px;padding:10px;
+  border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-2)}
 .row input[type=time]{flex:1}
-button{border:none;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer}
+button{border:none;border-radius:var(--radius-sm);padding:10px 14px;font-weight:600;cursor:pointer;font-family:inherit}
 .btn-primary{background:var(--accent);color:var(--accent-text)}
-.btn-secondary{background:transparent;border:1px solid var(--border);color:var(--text)}
-.btn-danger{background:transparent;border:1px solid var(--bad);color:var(--bad)}
+button:hover:not(:disabled){filter:brightness(1.04)}
+button:focus-visible,a:focus-visible{outline:none;box-shadow:0 0 0 3px var(--ring)}
+button:disabled{opacity:.45;cursor:not-allowed}
+.btn-secondary{background:var(--surface-2);border:1px solid var(--border-strong);color:var(--text-dim)}
+.btn-danger{background:var(--bad-bg);border:1px solid transparent;color:var(--bad)}
 .toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-top:20px}
 .status{min-height:1.2rem;margin-top:12px;font-size:.92rem}
 .status.ok{color:var(--good)} .status.err{color:var(--bad)}
-.nav{margin-bottom:16px}
-.nav a{color:var(--accent);text-decoration:none;font-weight:600}
 .note{font-size:.9rem;color:var(--text-dim);margin-top:8px}
+@media(max-width:680px){
+  body{padding:16px 12px 40px}
+  .top-actions{width:100%}
+  .card{padding:18px}
+  .row{align-items:stretch}
+}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="nav"><a href="/dashboard">← Back to dashboard</a></div>
+  <div class="top">
+    <div>
+      <h1><span class="dot" title="Interview Tracker is running"></span>Interview Tracker</h1>
+      <div class="sub">Scan settings · schedules use your Mac's local clock</div>
+    </div>
+    <div class="top-actions">
+      <a class="toggle" href="/dashboard">← Dashboard</a>
+      <button class="toggle" id="theme" type="button" aria-label="Toggle dark mode"><span id="themeIcon">🌙</span><span id="themeLabel">Dark</span></button>
+    </div>
+  </div>
   <div class="card">
-    <h1>Scan settings</h1>
+    <h2>Scan settings</h2>
     <p>Configure daily Gmail scan times and an optional email filter. Times use your Mac's local clock.</p>
     <form id="settings-form">
       <label for="email">Email filter</label>
@@ -61,6 +110,23 @@ const MAX_TIMES = __MAX_SCAN_TIMES__;
 const timesEl = document.getElementById("times");
 const statusEl = document.getElementById("status");
 const addBtn = document.getElementById("add-time");
+
+function setTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  document.getElementById("themeIcon").textContent = theme === "dark" ? "☀️" : "🌙";
+  document.getElementById("themeLabel").textContent = theme === "dark" ? "Light" : "Dark";
+}
+
+setTheme(
+  window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light"
+);
+document.getElementById("theme").addEventListener("click", () => {
+  setTheme(
+    document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark"
+  );
+});
 
 function csrfHeaders() {
   return {"Content-Type":"application/json","X-CSRF-Token": CSRF};
