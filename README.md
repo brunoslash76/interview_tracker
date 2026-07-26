@@ -225,6 +225,11 @@ a SameSite CSRF cookie and a matching request origin. If the menu-bar app is not
 running, open the static private `dashboard.html` fallback instead (Settings
 links will not work there).
 
+When the loopback server is running, the dashboard header includes **Scan Gmail
+now**. It starts the same `bin/scan_gmail.sh` pipeline as **Refresh Now**, shows
+a progress modal with live phase updates, and refreshes the table in place when
+the scan finishes.
+
 ## Manual operation
 
 Run these commands from the clone:
