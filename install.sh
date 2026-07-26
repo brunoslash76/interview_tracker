@@ -1,6 +1,10 @@
 #!/bin/bash
 # Interview Tracker — unified installer (merged project).
-# Run once from inside the project folder:  bash install.sh
+# Run once from inside the project folder:
+#   macOS:    bash install.sh
+#   Linux:    bash install.sh   → delegates to install-linux.sh
+#   Windows (Git Bash):   bash install.sh  → delegates to install.ps1
+#   Windows (native):     powershell -ExecutionPolicy Bypass -File install.ps1
 #
 # Installs three launchd agents (scheduler + notifier + menu bar), builds the
 # menu-bar app's Python venv, and migrates off any earlier interview-tracker
@@ -8,6 +12,27 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+case "$(uname -s)" in
+  Darwin) ;;
+  Linux)
+    echo "Detected Linux — running install-linux.sh…"
+    exec bash "${ROOT}/install-linux.sh"
+    ;;
+  MINGW*|MSYS*|CYGWIN*)
+    echo "Detected Windows shell environment — running install.ps1…"
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${ROOT}/install.ps1"
+    exit $?
+    ;;
+  *)
+    echo "ERROR: Unsupported platform for install.sh."
+    echo "  macOS:   bash install.sh"
+    echo "  Linux:   bash install-linux.sh"
+    echo "  Windows: powershell -ExecutionPolicy Bypass -File install.ps1"
+    exit 1
+    ;;
+esac
+
 DATA_DIR="${INTERVIEW_TRACKER_DATA_DIR:-${HOME}/Library/Application Support/InterviewTracker}"
 AGENT_DIR="${HOME}/Library/LaunchAgents"
 PLISTS=(com.interview-tracker.notifier com.interview-tracker.menubar)
@@ -117,8 +142,8 @@ if ! "${ROOT}/venv/bin/python3" -m coverage --version >/dev/null 2>&1; then
 fi
 
 # --- permissions + folders --------------------------------------------------
-chmod +x "${ROOT}/bin/scan_gmail.sh" "${ROOT}/bin/macos_notifier.sh" \
-         "${ROOT}/bin/merge_interviews.py" "${ROOT}/bin/menubar_app.py" \
+chmod +x "${ROOT}/bin/scan_gmail.sh" "${ROOT}/bin/scan_gmail.py" "${ROOT}/bin/macos_notifier.sh" \
+         "${ROOT}/bin/notifier.py" "${ROOT}/bin/merge_interviews.py" "${ROOT}/bin/menubar_app.py" \
          "${ROOT}/bin/migrate_json_to_sqlite.py" "${ROOT}/bin/scheduler.py" \
          "${ROOT}/bin/local_server.py" \
          "${ROOT}/scripts/install_git_hooks.sh" "${ROOT}/scripts/run_checks.sh" \
@@ -128,18 +153,18 @@ chmod +x "${ROOT}/bin/scan_gmail.sh" "${ROOT}/bin/macos_notifier.sh" \
 
 echo "Initializing private database…"
 INTERVIEW_TRACKER_DATA_DIR="${DATA_DIR}" \
-    /usr/bin/python3 "${ROOT}/bin/database.py" \
+    "${ROOT}/venv/bin/python3" "${ROOT}/bin/database.py" \
     --db "${DATA_DIR}/interview_tracker.sqlite3" init >/dev/null
 echo "Checking for legacy private data…"
 INTERVIEW_TRACKER_DATA_DIR="${DATA_DIR}" \
-    /usr/bin/python3 "${ROOT}/bin/migrate_json_to_sqlite.py"
+    "${ROOT}/venv/bin/python3" "${ROOT}/bin/migrate_json_to_sqlite.py"
 if [ -f "${ROOT}/config.env.example" ] && [ ! -f "${DATA_DIR}/config.env" ]; then
     cp "${ROOT}/config.env.example" "${DATA_DIR}/config.env"
     chmod 600 "${DATA_DIR}/config.env"
     echo "Created private config: ${DATA_DIR}/config.env"
 fi
 INTERVIEW_TRACKER_DATA_DIR="${DATA_DIR}" \
-    /usr/bin/python3 "${ROOT}/bin/merge_interviews.py" >/dev/null
+    "${ROOT}/venv/bin/python3" "${ROOT}/bin/merge_interviews.py" >/dev/null
 
 # --- migrate off any earlier agents (email-reader + old .interview_tracker) --
 for old in "${OLD_LABELS[@]}"; do
@@ -199,7 +224,7 @@ done
 
 echo "Syncing Gmail scan scheduler from SQLite…"
 INTERVIEW_TRACKER_DATA_DIR="${DATA_DIR}" \
-    /usr/bin/python3 "${ROOT}/bin/scheduler.py" sync \
+    "${ROOT}/venv/bin/python3" "${ROOT}/bin/scheduler.py" sync \
     --root "${ROOT}" --home "${HOME}" --data-dir "${DATA_DIR}" \
     --db "${DATA_DIR}/interview_tracker.sqlite3"
 
