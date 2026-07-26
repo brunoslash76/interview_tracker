@@ -1,94 +1,35 @@
 #!/usr/bin/env python3
-"""Render and reload the Interview Tracker launchd scheduler from SQLite."""
+"""Render and reload the Interview Tracker scheduler from SQLite."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import plistlib
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Optional
 
 import database
+import platform_utils
 
-SCHEDULER_LABEL = "com.interview-tracker.scheduler"
-DEFAULT_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+if platform_utils.is_darwin():
+    import scheduler_launchd as _backend
+elif platform_utils.is_windows():
+    import scheduler_windows as _backend
+elif platform_utils.is_linux():
+    import scheduler_systemd as _backend
+else:
+    _backend = None  # type: ignore[assignment]
 
-
-def _agent_dir() -> Path:
-    return Path.home() / "Library" / "LaunchAgents"
-
-
-def _installed_plist_path() -> Path:
-    return _agent_dir() / f"{SCHEDULER_LABEL}.plist"
-
-
-def build_plist_dict(
-    root: Path,
-    home: Path,
-    data_dir: Path,
-    intervals: list[tuple[int, int]],
-) -> dict[str, Any]:
-    plist: dict[str, Any] = {
-        "Label": SCHEDULER_LABEL,
-        "ProgramArguments": ["/bin/bash", str(root / "bin" / "scan_gmail.sh")],
-        "RunAtLoad": False,
-        "WorkingDirectory": str(root),
-        "StandardOutPath": str(data_dir / "logs" / "scheduler.out.log"),
-        "StandardErrorPath": str(data_dir / "logs" / "scheduler.err.log"),
-        "EnvironmentVariables": {
-            "PATH": DEFAULT_PATH,
-            "HOME": str(home),
-            "INTERVIEW_TRACKER_DATA_DIR": str(data_dir),
-        },
-        "ProcessType": "Background",
-    }
-    if intervals:
-        plist["StartCalendarInterval"] = [
-            {"Hour": hour, "Minute": minute} for hour, minute in intervals
-        ]
-    return plist
-
-
-def write_plist(path: Path, plist: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("wb") as handle:
-        plistlib.dump(plist, handle)
-    tmp.replace(path)
-    subprocess.run(["/usr/bin/plutil", "-lint", str(path)], check=True, capture_output=True)
-
-
-def gui_domain() -> str:
-    uid = os.getuid()
-    return f"gui/{uid}"
-
-
-def bootout_scheduler() -> None:
-    subprocess.run(
-        ["/bin/launchctl", "bootout", f"{gui_domain()}/{SCHEDULER_LABEL}"],
-        capture_output=True,
-        text=True,
-    )
-
-
-def bootstrap_scheduler(installed: Path) -> None:
-    domain = gui_domain()
-    result = subprocess.run(
-        ["/bin/launchctl", "bootstrap", domain, str(installed)],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        subprocess.run(
-            ["/bin/launchctl", "load", str(installed)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+# Re-export macOS helpers for tests and tooling.
+if platform_utils.is_darwin():
+    SCHEDULER_LABEL = _backend.SCHEDULER_LABEL
+    build_plist_dict = _backend.build_plist_dict
+    write_plist = _backend.write_plist
+    bootout_scheduler = _backend.bootout_scheduler
+    bootstrap_scheduler = _backend.bootstrap_scheduler
+    _installed_plist_path = _backend._installed_plist_path
 
 
 def sync_scheduler(
@@ -98,15 +39,11 @@ def sync_scheduler(
     db_path: Optional[Path] = None,
     load_agent: bool = True,
 ) -> dict[str, Any]:
+    if _backend is None:
+        raise RuntimeError("scheduler is not supported on this platform")
     database.initialize_database(db_path)
     intervals = database.get_enabled_scan_intervals(db_path)
-    installed = _installed_plist_path()
-    plist = build_plist_dict(root, home, data_dir, intervals)
-    write_plist(installed, plist)
-    if load_agent:
-        bootout_scheduler()
-        bootstrap_scheduler(installed)
-    return {"intervals": intervals, "installed_plist": str(installed)}
+    return _backend.sync_scheduler(root, home, data_dir, intervals, load_agent=load_agent)
 
 
 def apply_settings_with_rollback(
@@ -117,9 +54,14 @@ def apply_settings_with_rollback(
     data_dir: Path,
     db_path: Optional[Path] = None,
 ) -> dict[str, Any]:
+    if _backend is None:
+        raise RuntimeError("scheduler is not supported on this platform")
     previous = database.get_user_settings(db_path)
-    installed = _installed_plist_path()
-    plist_backup = installed.read_bytes() if installed.exists() else None
+    if platform_utils.is_darwin():
+        installed = _backend._installed_plist_path()
+        backup = installed.read_bytes() if installed.exists() else None
+    else:
+        backup = _backend.read_scheduler_backup(data_dir)
     try:
         saved = database.update_user_settings(email, scan_times, db_path)
         sync_scheduler(root, home, data_dir, db_path, load_agent=True)
@@ -128,11 +70,10 @@ def apply_settings_with_rollback(
         database.update_user_settings(
             previous["email"], previous["scan_times"], db_path
         )
-        if plist_backup is not None:
-            installed.write_bytes(plist_backup)
-            subprocess.run(["/usr/bin/plutil", "-lint", str(installed)], check=False)
-            bootout_scheduler()
-            bootstrap_scheduler(installed)
+        if platform_utils.is_darwin():
+            _backend.restore_scheduler_backup(installed, backup)
+        else:
+            _backend.restore_scheduler_backup(data_dir, backup)
         raise
 
 
@@ -140,16 +81,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Interview Tracker scheduler sync")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--home", type=Path, default=Path.home())
-    parser.add_argument(
-        "--data-dir",
-        type=Path,
-        default=Path(
-            os.environ.get(
-                "INTERVIEW_TRACKER_DATA_DIR",
-                Path.home() / "Library" / "Application Support" / "InterviewTracker",
-            )
-        ).expanduser(),
-    )
+    parser.add_argument("--data-dir", type=Path, default=platform_utils.default_data_dir())
     parser.add_argument("--db", type=Path)
     parser.add_argument("--no-load", action="store_true")
     subparsers = parser.add_subparsers(dest="command")
@@ -158,7 +90,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     apply_parser.add_argument("--payload", required=True, help="JSON settings payload")
     args = parser.parse_args(argv)
 
-    db_path = args.db or (args.data_dir / database.DEFAULT_DB_NAME)
+    db_path = args.db or (args.data_dir.expanduser() / database.DEFAULT_DB_NAME)
     if args.command in (None, "sync"):
         result = sync_scheduler(
             args.root.expanduser(),
