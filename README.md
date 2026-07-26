@@ -3,10 +3,11 @@
 [![Tests](https://github.com/brunoslash76/interview_tracker/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/brunoslash76/interview_tracker/actions/workflows/tests.yml)
 ![Python coverage](coverage.svg)
 
-Interview Tracker is a local macOS automation that scans Gmail for job-interview
-threads, merges structured results into a private SQLite database, renders an
-HTML dashboard, and sends change-aware notifications. A lightweight Python
-menu-bar app shows current counts and can start a scan.
+Interview Tracker is a local automation for **macOS, Windows, and Linux** that scans Gmail
+for job-interview threads, merges structured results into a private SQLite
+database, renders an HTML dashboard, and sends change-aware notifications. On
+macOS, a lightweight Python menu-bar app shows current counts and can start a
+scan; on Windows and Linux, a system-tray app provides the same controls.
 
 The repository contains code and portable templates only. User records,
 configuration, generated pages, logs, and backups live outside the clone.
@@ -40,12 +41,32 @@ Gmail.
 
 ## Prerequisites
 
+### macOS
+
 - macOS 11 or later
 - `/usr/bin/python3`, including `venv` and `pip`
 - **Claude CLI** with Gmail access configured (see [Set up Claude](#set-up-claude-required-before-gmail-scans) below)
 - Network access during installation for `rumps` and `pyobjc`
 - Optional: `brew install terminal-notifier` for more reliable Mac alerts
 - Optional: the ntfy app and a private topic for phone/watch pushes
+
+### Windows
+
+- Windows 10 or later
+- Python 3.11+ (`py -3` or `python` on PATH)
+- **Claude CLI** with Gmail access (same MCP tools as macOS)
+- Network access during installation for `pystray`, `Pillow`, and `win10toast`
+- Optional: ntfy topic in private `config.env` for phone pushes
+- Task Scheduler runs in the **current user** context (no administrator required)
+
+### Linux
+
+- A mainstream distro with **systemd** and `systemctl --user`
+- Python 3.11+ with `venv` and `pip`
+- **Claude CLI** with Gmail MCP (same tools as macOS)
+- `pip install -r requirements-linux.txt` (pystray, Pillow) via the installer
+- Optional: `libnotify-bin` for `notify-send`; ntfy topic in `config.env`
+- Graphical session for the system tray (Wayland tray support varies by distro)
 
 ## Set up Claude (required before Gmail scans)
 
@@ -134,13 +155,18 @@ Save the file, then test again with `bash bin/scan_gmail.sh`.
 
 ## Install
 
+### macOS
+
 ```sh
 git clone <repository-url> email-reader
 cd email-reader
 bash install.sh
 ```
 
-The installer:
+`install.sh` on **macOS** runs the launchd installer; on **Linux** it delegates to
+`install-linux.sh`; on **Git Bash/MSYS** it delegates to `install.ps1`.
+
+The macOS installer:
 
 - creates `~/Library/Application Support/InterviewTracker`;
 - copies `config.env.example` to the private `config.env` if none exists;
@@ -150,6 +176,73 @@ The installer:
 - renders the portable plist templates into `~/Library/LaunchAgents`; and
 - syncs the Gmail scheduler LaunchAgent from SQLite; and
 - loads the scheduler, notifier, and menu-bar LaunchAgents.
+
+### Windows
+
+```powershell
+git clone <repository-url> email-reader
+cd email-reader
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+The Windows installer:
+
+- creates `%LOCALAPPDATA%\InterviewTracker` (override with `INTERVIEW_TRACKER_DATA_DIR`);
+- copies `config.env.example` to private `config.env` when missing;
+- initializes SQLite and renders the initial dashboard;
+- builds `venv\` and installs `requirements-windows.txt` (tray + notifications);
+- registers Task Scheduler jobs `InterviewTracker\GmailScan` (daily scan times from SQLite)
+  and `InterviewTracker\Tray` (system tray at logon, with restart on failure).
+
+Manual scan:
+
+```powershell
+.\venv\Scripts\python.exe .\bin\scan_gmail.py
+```
+
+Task status:
+
+```powershell
+schtasks /Query /TN InterviewTracker\GmailScan
+schtasks /Query /TN InterviewTracker\Tray
+```
+
+### Linux
+
+```sh
+git clone <repository-url> email-reader
+cd email-reader
+bash install-linux.sh
+```
+
+(`bash install.sh` on Linux delegates to the same script.)
+
+The Linux installer:
+
+- creates `~/.local/share/InterviewTracker` (or `$XDG_DATA_HOME/InterviewTracker`);
+- copies `config.env.example` to private `config.env` when missing;
+- initializes SQLite and renders the initial dashboard;
+- builds `venv/` and installs `requirements-linux.txt` (pystray + Pillow);
+- installs **systemd user units** for scan timer, DB-triggered notifier, and tray;
+- enables `interview-tracker-scan.timer`, `interview-tracker-notifier.path`, and `interview-tracker-tray.service`.
+
+Manual scan:
+
+```sh
+./venv/bin/python3 ./bin/scan_gmail.py
+```
+
+Unit status:
+
+```sh
+systemctl --user status interview-tracker-scan.timer
+systemctl --user status interview-tracker-tray.service
+journalctl --user -u interview-tracker-tray.service -f
+```
+
+Optional: `loginctl enable-linger "$USER"` so scheduled scans can run after you log out (tray still needs a graphical session).
+
+Distro packages often needed: `python3-venv`, `libnotify-bin` (`notify-send`), and AppIndicator/system tray libraries for pystray on Wayland.
 
 If you have not completed [Set up Claude](#set-up-claude-required-before-gmail-scans),
 do that before expecting Gmail scans to work.
@@ -183,8 +276,36 @@ The default runtime location is:
 
 `raw_extraction.*` files may exist briefly during a scan and are removed on
 exit. Set `INTERVIEW_TRACKER_DATA_DIR` to override the runtime directory for
-manual or custom deployments; installed LaunchAgents retain the location
-rendered at install time.
+manual or custom deployments; installed agents/tasks retain the location
+configured at install time.
+
+### Windows private data layout
+
+```text
+%LOCALAPPDATA%\InterviewTracker\
+├── interview_tracker.sqlite3
+├── dashboard.html
+├── config.env
+├── tasks\                     # exported Task Scheduler XML
+├── .last_notified_hash
+├── .http_port
+├── scan.lock\
+└── logs\
+```
+
+### Linux private data layout
+
+```text
+~/.local/share/InterviewTracker/   # or $XDG_DATA_HOME/InterviewTracker
+├── interview_tracker.sqlite3
+├── dashboard.html
+├── config.env
+├── systemd/                     # canonical unit files installed to ~/.config/systemd/user/
+├── .last_notified_hash
+├── .http_port
+├── scan.lock/
+└── logs/
+```
 
 ## SQLite data model
 

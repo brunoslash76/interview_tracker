@@ -22,6 +22,7 @@ fi
 
 echo "Validating shell scripts…"
 bash -n install.sh
+bash -n install-linux.sh
 bash -n bin/scan_gmail.sh
 bash -n bin/macos_notifier.sh
 bash -n InterviewTracker.app/Contents/MacOS/InterviewTracker

@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  test-macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,3 +33,49 @@ jobs:
         with:
           name: python-coverage
           path: coverage.xml
+
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node for dashboard component tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pip install -r requirements-windows.txt
+
+      - name: Run Windows quick quality gate
+        run: pwsh scripts/run_checks.ps1 quick
+
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node for dashboard component tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: |
+          python3 -m pip install -r requirements-dev.txt
+          python3 -m pip install -r requirements-linux.txt
+
+      - name: Run Linux quick quality gate
+        run: bash scripts/run_checks_linux.sh quick
