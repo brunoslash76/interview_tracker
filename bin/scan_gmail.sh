@@ -12,13 +12,33 @@ LOG_FILE="${DATA_DIR}/logs/scan.log"
 CONF="${INTERVIEW_TRACKER_CONFIG:-${DATA_DIR}/config.env}"
 
 mkdir -p "${DATA_DIR}/logs"
+PROGRESS_FILE="${DATA_DIR}/.scan_progress.json"
 # shellcheck disable=SC1090
 [ -f "${CONF}" ] && source "${CONF}"
+
+emit_progress() {
+  local phase="$1"
+  local detail="${2:-}"
+  /usr/bin/python3 -c "
+import json, sys
+from datetime import datetime, timezone
+from pathlib import Path
+path = Path(sys.argv[1])
+phase = sys.argv[2]
+payload = {'phase': phase, 'updated_at': datetime.now(timezone.utc).isoformat()}
+if len(sys.argv) > 3 and sys.argv[3]:
+    payload['detail'] = sys.argv[3]
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(json.dumps(payload), encoding='utf-8')
+" "${PROGRESS_FILE}" "${phase}" "${detail}"
+  echo "IT_PROGRESS:${phase}" >&2
+}
 
 LOCK_DIR="${DATA_DIR}/scan.lock"
 if ! mkdir "${LOCK_DIR}" 2>/dev/null; then
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] scan already running — exiting" >> "${DATA_DIR}/logs/scan.log"
-  exit 0
+  emit_progress "busy" "scan lock held"
+  exit 2
 fi
 
 RAW_FILE=$(mktemp "${DATA_DIR}/raw_extraction.XXXXXX") || exit 1
@@ -38,9 +58,11 @@ fi
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "${LOG_FILE}"; }
 log "=== scan started (claude: ${CLAUDE_BIN}) ==="
+emit_progress "starting"
 
 if ! command -v "${CLAUDE_BIN}" >/dev/null 2>&1 && [ ! -x "${CLAUDE_BIN}" ]; then
   log "ERROR: claude CLI not found. Set CLAUDE_BIN in config.env (see: which claude)."
+  emit_progress "failed" "claude CLI not found"
   exit 1
 fi
 
@@ -69,6 +91,7 @@ print(config.get('email_filter', ''), config.get('gmail_involvement_filter', '')
 if [[ -n "${EMAIL_FILTER}" ]]; then
   log "using email involvement filter for ${EMAIL_FILTER}"
 fi
+emit_progress "config"
 
 JSON_SCHEMA='{
   "type": "object",
@@ -122,6 +145,7 @@ For every distinct company/application you find, extract one record with:
 
 Output ONLY the structured JSON matching the provided schema — no prose, no markdown fences."
 
+emit_progress "extracting"
 if ! perl -e 'alarm shift; exec @ARGV' 600 "${CLAUDE_BIN}" -p "${PROMPT}" \
   --system-prompt "You are a headless data-extraction worker with no memory, no persona, and no context beyond this task. Use only the tools explicitly provided. Follow the instructions exactly and produce only the requested output." \
   --allowedTools "mcp__claude_ai_Gmail__search_threads mcp__claude_ai_Gmail__get_thread" \
@@ -141,15 +165,19 @@ if not isinstance(interviews, list):
 json.dump(interviews, sys.stdout)
 " > "${RAW_FILE}" 2>>"${LOG_FILE}"; then
   log "ERROR: claude invocation or JSON parsing failed"
+  emit_progress "failed" "claude extraction failed"
   exit 1
 fi
 
 COUNT=$(/usr/bin/python3 -c "import json, sys; print(len(json.load(open(sys.argv[1]))))" "${RAW_FILE}")
 log "extracted ${COUNT} candidate records"
 
+emit_progress "merging" "${COUNT}"
 if ! /usr/bin/python3 "${ROOT}/bin/merge_interviews.py" "${RAW_FILE}" >> "${LOG_FILE}" 2>&1; then
   log "ERROR: failed to merge extracted records"
+  emit_progress "failed" "merge failed"
   exit 1
 fi
 
+emit_progress "complete" "${COUNT}"
 log "=== scan completed ==="
