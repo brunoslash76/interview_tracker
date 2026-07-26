@@ -194,6 +194,9 @@ INTERVIEW_TRACKER_DATA_DIR="${DATA_DIR}" \
     --root "${ROOT}" --home "${HOME}" --data-dir "${DATA_DIR}" \
     --db "${DATA_DIR}/interview_tracker.sqlite3"
 
+echo "Configuring repository Git hooks…"
+"${ROOT}/scripts/install_git_hooks.sh"
+
 echo
 echo "Installed. Configure scan times in Settings (menu bar → Settings)."
 echo

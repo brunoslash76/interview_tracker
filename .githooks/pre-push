@@ -1,0 +1,7 @@
+#!/bin/bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+
+echo "Running pre-push checks…"
+exec "${ROOT}/scripts/run_checks.sh" full
