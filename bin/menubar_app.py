@@ -3,13 +3,13 @@
 import os
 import subprocess
 import threading
-from datetime import datetime
 from pathlib import Path
 
 import rumps
 from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
 
 import database
+import menubar_logic
 
 try:
     import local_server
@@ -33,18 +33,7 @@ NSApplication.sharedApplication().setActivationPolicy_(NSApplicationActivationPo
 
 
 def parse_dt(value):
-    if not value or not isinstance(value, str):
-        return None
-    v = value.strip()
-    if v.endswith("Z"):
-        v = v[:-1] + "+00:00"
-    try:
-        dt = datetime.fromisoformat(v)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
-    return dt
+    return menubar_logic.parse_dt(value)
 
 
 def fmt_dt(dt):
@@ -52,8 +41,7 @@ def fmt_dt(dt):
 
 
 def is_rejected(r):
-    s = (r.get("status") or "").lower()
-    return any(w in s for w in ("reject", "withdraw", "declin"))
+    return menubar_logic.is_rejected(r)
 
 
 class InterviewTrackerApp(rumps.App):
@@ -85,35 +73,10 @@ class InterviewTrackerApp(rumps.App):
             self.summary = {}
 
     def upcoming_records(self, limit=5):
-        now = datetime.now().astimezone()
-        upcoming = []
-        for r in self.records:
-            if is_rejected(r):
-                continue
-            dt = parse_dt(r.get("interview_datetime"))
-            if dt and dt >= now:
-                upcoming.append((dt, r))
-        upcoming.sort(key=lambda pair: pair[0])
-        return upcoming[:limit]
+        return menubar_logic.upcoming_records(self.records, limit=limit)
 
     def action_count(self):
-        """Count records where the ball is in the user's court: an upcoming
-        interview, or a next-step naming an action still owed."""
-        cues = ("take-home", "book ", "calendly", "not yet booked", "sign nda",
-                "docusign", "complete", "respond", "reference")
-        n = 0
-        now = datetime.now().astimezone()
-        for r in self.records:
-            if is_rejected(r):
-                continue
-            dt = parse_dt(r.get("interview_datetime"))
-            if dt and dt >= now:
-                n += 1
-                continue
-            blob = ((r.get("next_steps") or "") + " " + (r.get("status") or "")).lower()
-            if any(c in blob for c in cues):
-                n += 1
-        return n
+        return menubar_logic.action_count(self.records)
 
     def rebuild_menu(self):
         upcoming = self.upcoming_records()
