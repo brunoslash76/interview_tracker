@@ -1,0 +1,40 @@
+# macOS and editors
+.DS_Store
+*.swp
+
+# Python environments and bytecode
+venv/
+.venv/
+__pycache__/
+.pycache/
+*.py[cod]
+
+# Private configuration and runtime state
+config.env
+.ntfy_topic
+.last_notified_hash
+.last_scan_date
+.raw_extraction.json
+.http_port
+scan.lock/
+raw_extraction.*
+logs/
+
+# Legacy or overridden repository-local data
+data/*.json
+data/*.sqlite
+data/*.sqlite-*
+data/*.db
+data/*.db-*
+**/interviews.json
+**/last_run_summary.json
+*.sqlite3
+*.sqlite3-*
+interview-tracker-export*.json
+
+# Generated dashboard (contains embedded private records)
+dashboard.html
+
+# Atomic-write and test artifacts
+*.tmp
+.coverage
