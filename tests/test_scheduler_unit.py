@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import plistlib
+import json
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -134,6 +135,93 @@ class SyncSchedulerTests(TemporaryDatabaseTestCase):
         self.assertIn("intervals", result)
         bootout.assert_not_called()
         bootstrap.assert_not_called()
+
+    def test_bootstrap_falls_back_to_legacy_load(self):
+        scheduler_module = load_bin_module("scheduler")
+        installed = self.root / "scheduler.plist"
+        bootstrap_result = mock.Mock(returncode=5)
+        with mock.patch.object(
+            scheduler_module.subprocess,
+            "run",
+            side_effect=[bootstrap_result, mock.Mock(returncode=0)],
+        ) as run:
+            scheduler_module.bootstrap_scheduler(installed)
+
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[1].args[0][:2], ["/bin/launchctl", "load"])
+
+    def test_main_sync_passes_explicit_paths_and_prints_json(self):
+        scheduler_module = load_bin_module("scheduler")
+        result = {"intervals": [(9, 0)], "installed_plist": "/tmp/scheduler.plist"}
+        with mock.patch.object(
+            scheduler_module, "sync_scheduler", return_value=result
+        ) as sync, mock.patch("builtins.print") as print_mock:
+            exit_code = scheduler_module.main(
+                [
+                    "--root",
+                    str(PROJECT_ROOT),
+                    "--home",
+                    str(self.home_dir),
+                    "--data-dir",
+                    str(self.data_dir),
+                    "--db",
+                    str(self.db_path),
+                    "--no-load",
+                    "sync",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        sync.assert_called_once_with(
+            PROJECT_ROOT,
+            self.home_dir,
+            self.data_dir,
+            self.db_path,
+            load_agent=False,
+        )
+        self.assertEqual(
+            json.loads(print_mock.call_args.args[0]),
+            {"intervals": [[9, 0]], "installed_plist": "/tmp/scheduler.plist"},
+        )
+
+    def test_main_apply_settings_decodes_payload(self):
+        scheduler_module = load_bin_module("scheduler")
+        result = {
+            "status": "ok",
+            "email": "me@example.com",
+            "scan_times": ["08:30"],
+        }
+        payload = json.dumps(
+            {"email": "me@example.com", "scan_times": ["08:30"]}
+        )
+        with mock.patch.object(
+            scheduler_module, "apply_settings_with_rollback", return_value=result
+        ) as apply, mock.patch("builtins.print"):
+            exit_code = scheduler_module.main(
+                [
+                    "--root",
+                    str(PROJECT_ROOT),
+                    "--home",
+                    str(self.home_dir),
+                    "--data-dir",
+                    str(self.data_dir),
+                    "--db",
+                    str(self.db_path),
+                    "apply-settings",
+                    "--payload",
+                    payload,
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        apply.assert_called_once_with(
+            "me@example.com",
+            ["08:30"],
+            PROJECT_ROOT,
+            self.home_dir,
+            self.data_dir,
+            self.db_path,
+        )
 
 
 if __name__ == "__main__":
