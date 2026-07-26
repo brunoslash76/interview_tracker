@@ -22,18 +22,14 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Validate shell scripts
-        run: |
-          bash -n install.sh
-          bash -n bin/scan_gmail.sh
-          bash -n bin/macos_notifier.sh
-          bash -n InterviewTracker.app/Contents/MacOS/InterviewTracker
+      - name: Install coverage tooling
+        run: python3 -m pip install -r requirements-dev.txt
 
-      - name: Validate launchd templates
-        run: plutil -lint launchd/*.plist InterviewTracker.app/Contents/Info.plist
+      - name: Run full quality gate with coverage
+        run: bash scripts/run_checks.sh full
 
-      - name: Run unit tests
-        run: python3 -m unittest discover -s tests -p 'test_*_unit.py' -v
-
-      - name: Run integration tests
-        run: python3 -m unittest discover -s tests -p 'test_integration_*.py' -v
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-coverage
+          path: coverage.xml
