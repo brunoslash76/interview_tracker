@@ -19,9 +19,11 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Union
 
+import platform_utils
+
 
 SCHEMA_VERSION = 2
-DEFAULT_DATA_DIR = Path.home() / "Library" / "Application Support" / "InterviewTracker"
+DEFAULT_DATA_DIR = platform_utils.default_data_dir()
 DEFAULT_DB_NAME = "interview_tracker.sqlite3"
 LAST_SUCCESSFUL_SCAN_DATE_KEY = "last_successful_scan_date"
 LATEST_EMAIL_WATERMARK_KEY = "latest_email_watermark"
@@ -60,7 +62,8 @@ def get_database_path(db_path: Optional[PathLike] = None) -> Path:
     if configured_db:
         return Path(configured_db).expanduser()
     data_dir = os.environ.get("INTERVIEW_TRACKER_DATA_DIR")
-    return (Path(data_dir).expanduser() if data_dir else DEFAULT_DATA_DIR) / DEFAULT_DB_NAME
+    base = Path(data_dir).expanduser() if data_dir else platform_utils.default_data_dir()
+    return base / DEFAULT_DB_NAME
 
 
 def normalize_company(company: Any) -> str:

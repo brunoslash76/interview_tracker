@@ -13,14 +13,10 @@ from datetime import datetime
 from pathlib import Path
 
 import database
+import platform_utils
 
 ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = Path(
-    os.environ.get(
-        "INTERVIEW_TRACKER_DATA_DIR",
-        Path.home() / "Library" / "Application Support" / "InterviewTracker",
-    )
-).expanduser()
+DATA_DIR = platform_utils.default_data_dir()
 DB_FILE = DATA_DIR / database.DEFAULT_DB_NAME
 TEMPLATE_FILE = ROOT / "dashboard_template.html"
 DASHBOARD_FILE = DATA_DIR / "dashboard.html"
@@ -34,7 +30,7 @@ def atomic_write(path: Path, content: str):
 
 def render_dashboard(records):
     safe_json = json.dumps(records, ensure_ascii=False).replace("</", "<\\/")
-    generated_at = html.escape(datetime.now().astimezone().strftime("%b %-d, %Y at %-I:%M %p"))
+    generated_at = html.escape(platform_utils.format_dashboard_timestamp())
     template = TEMPLATE_FILE.read_text()
     return template.replace("__DATA_JSON__", safe_json).replace("__GENERATED_AT__", generated_at)
 

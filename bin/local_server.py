@@ -15,16 +15,12 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 import database
+import platform_utils
 import scheduler
 import scan_runner
 
 ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = Path(
-    os.environ.get(
-        "INTERVIEW_TRACKER_DATA_DIR",
-        Path.home() / "Library" / "Application Support" / "InterviewTracker",
-    )
-).expanduser()
+DATA_DIR = platform_utils.default_data_dir()
 DB_FILE = DATA_DIR / database.DEFAULT_DB_NAME
 DASHBOARD_TEMPLATE = ROOT / "dashboard_template.html"
 SETTINGS_TEMPLATE = ROOT / "settings_template.html"

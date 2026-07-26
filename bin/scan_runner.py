@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 import database
+import platform_utils
 
 PROGRESS_FILENAME = ".scan_progress.json"
 LOCK_DIRNAME = "scan.lock"
@@ -127,7 +128,7 @@ class ScanRunner:
         self.root = root
         self.data_dir = data_dir
         self.db_path = db_path
-        self.scan_script = scan_script or (root / "bin" / "scan_gmail.sh")
+        self.scan_script = scan_script or (root / "bin" / "scan_gmail.py")
         self._subprocess_runner = subprocess_runner or subprocess.run
         self._lock = threading.Lock()
         self._snapshot = _empty_snapshot()
@@ -181,7 +182,10 @@ class ScanRunner:
         stderr_lines: list[str] = []
         try:
             result = self._subprocess_runner(
-                ["/bin/bash", str(self.scan_script)],
+                [
+                    platform_utils.resolve_python_for_subprocess(self.root),
+                    str(self.scan_script),
+                ],
                 cwd=str(self.root),
                 env=env,
                 capture_output=True,
@@ -242,7 +246,7 @@ class ScanRunner:
 def dashboard_payload(db_path: Path) -> dict[str, Any]:
     records = database.get_records(db_path)
     summary = database.get_latest_summary(db_path)
-    generated_at = datetime.now().astimezone().strftime("%b %-d, %Y at %-I:%M %p")
+    generated_at = platform_utils.format_dashboard_timestamp()
     return {
         "records": records,
         "generated_at": generated_at,

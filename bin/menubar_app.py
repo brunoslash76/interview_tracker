@@ -10,22 +10,18 @@ from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
 
 import database
 import menubar_logic
+import platform_utils
 
 try:
     import local_server
 except ImportError:
     local_server = None  # type: ignore[assignment]
 
-ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = Path(
-    os.environ.get(
-        "INTERVIEW_TRACKER_DATA_DIR",
-        Path.home() / "Library" / "Application Support" / "InterviewTracker",
-    )
-).expanduser()
+ROOT = platform_utils.project_root()
+DATA_DIR = platform_utils.default_data_dir()
 DB_FILE = DATA_DIR / database.DEFAULT_DB_NAME
 DASHBOARD_FILE = DATA_DIR / "dashboard.html"
-SCAN_SCRIPT = ROOT / "bin" / "scan_gmail.sh"
+SCAN_SCRIPT = ROOT / "bin" / "scan_gmail.py"
 DEBUG_LOG = DATA_DIR / "logs" / "menubar_debug.log"
 
 # No Dock icon / app switcher entry — menu bar only.
@@ -37,7 +33,7 @@ def parse_dt(value):
 
 
 def fmt_dt(dt):
-    return dt.strftime("%a %b %-d, %-I:%M %p")
+    return platform_utils.format_menubar_datetime(dt)
 
 
 def is_rejected(r):
@@ -110,10 +106,7 @@ class InterviewTrackerApp(rumps.App):
         self.menu.update(items)
 
     def _open_url(self, url: str, fallback: Path):
-        if url:
-            subprocess.run(["/usr/bin/open", url], capture_output=True, text=True)
-        else:
-            subprocess.run(["/usr/bin/open", str(fallback)], capture_output=True, text=True)
+        platform_utils.open_url_or_file(url, fallback)
 
     def open_dashboard(self, _sender):
         url = local_server.dashboard_url() if local_server else None
@@ -137,7 +130,11 @@ class InterviewTrackerApp(rumps.App):
 
     def _run_scan(self):
         try:
-            subprocess.run(["/bin/bash", str(SCAN_SCRIPT)], check=False)
+            subprocess.run(
+                [platform_utils.resolve_python_for_subprocess(ROOT), str(SCAN_SCRIPT)],
+                check=False,
+                cwd=str(ROOT),
+            )
         finally:
             self.refreshing = False
             self.load_data()
