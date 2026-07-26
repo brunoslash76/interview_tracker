@@ -1,42 +1,14 @@
-"""Standard-library integration tests for the Interview Tracker data layer."""
+"""Unit tests for bin/database.py."""
 
 from __future__ import annotations
 
-import importlib.util
-import json
+import os
 import sqlite3
-import sys
-import tempfile
 import unittest
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest import mock
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-BIN_DIR = PROJECT_ROOT / "bin"
-sys.path.insert(0, str(BIN_DIR))
-
-import database  # noqa: E402
-
-
-def load_bin_module(name: str):
-    """Load a bin script under a test-only module name."""
-    path = BIN_DIR / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(f"tests_{name}", path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"could not load {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-class TemporaryDatabaseTestCase(unittest.TestCase):
-    def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp_dir.cleanup)
-        self.root = Path(self.temp_dir.name)
-        self.db_path = self.root / "private" / "interviews.sqlite3"
+from tests.support import TemporaryDatabaseTestCase, database
 
 
 class SchemaTests(TemporaryDatabaseTestCase):
@@ -75,6 +47,20 @@ class SchemaTests(TemporaryDatabaseTestCase):
                 "SELECT COUNT(*) FROM applications"
             ).fetchone()[0]
         self.assertEqual(applications_count, 0)
+
+    def test_schema_version_too_new_raises(self):
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute("PRAGMA user_version = 99")
+        with self.assertRaises(RuntimeError) as ctx:
+            database.initialize_database(self.db_path)
+        self.assertIn("newer than supported", str(ctx.exception))
+
+    def test_connection_uses_delete_journal_mode(self):
+        database.initialize_database(self.db_path)
+        with sqlite3.connect(self.db_path) as connection:
+            mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+        self.assertEqual(mode.lower(), "delete")
 
 
 class MergeTests(TemporaryDatabaseTestCase):
@@ -148,6 +134,40 @@ class MergeTests(TemporaryDatabaseTestCase):
         self.assertEqual(records[0]["thread_id"], "gmail-real-thread")
         self.assertEqual(records[0]["first_seen"], first_seen)
 
+    def test_merge_preserves_existing_fields_when_incoming_values_are_null(self):
+        database.merge_records(
+            [
+                {
+                    "thread_id": "keep-notes",
+                    "company": "Notes Co",
+                    "notes": "important detail",
+                    "position": "Engineer",
+                }
+            ],
+            self.db_path,
+            timestamp="2026-01-01T00:00:00+00:00",
+        )
+        records, _, updated = database.merge_records(
+            [
+                {
+                    "thread_id": "keep-notes",
+                    "company": "Notes Co",
+                    "notes": None,
+                    "position": "Staff Engineer",
+                }
+            ],
+            self.db_path,
+            timestamp="2026-02-01T00:00:00+00:00",
+        )
+        self.assertEqual(updated, 1)
+        self.assertEqual(records[0]["notes"], "important detail")
+        self.assertEqual(records[0]["position"], "Staff Engineer")
+
+    def test_merge_records_rejects_non_mapping_entries(self):
+        database.initialize_database(self.db_path)
+        with self.assertRaises(TypeError):
+            database.merge_records(["not-a-mapping"], self.db_path)
+
 
 class SummaryTests(TemporaryDatabaseTestCase):
     def test_summary_hash_stats_are_deterministic_and_latest_summary_is_returned(self):
@@ -215,6 +235,18 @@ class SummaryTests(TemporaryDatabaseTestCase):
             stats, {"total": 2, "upcoming": 0, "offers": 1, "completed": 1}
         )
 
+    def test_merge_scan_skips_scan_date_update_when_disabled(self):
+        database.initialize_database(self.db_path)
+        database.set_last_successful_scan_date("2025-06-01", self.db_path)
+        database.merge_scan([], self.db_path, update_scan_date=False)
+        self.assertEqual(
+            database.get_last_successful_scan_date(self.db_path), "2025-06-01"
+        )
+        database.merge_scan([], self.db_path, scan_date="2026-01-15")
+        self.assertEqual(
+            database.get_last_successful_scan_date(self.db_path), "2026-01-15"
+        )
+
 
 class LegacyImportTests(TemporaryDatabaseTestCase):
     def test_import_preserves_timestamps_and_is_duplicate_free(self):
@@ -237,69 +269,60 @@ class LegacyImportTests(TemporaryDatabaseTestCase):
         self.assertEqual(records[0]["last_updated"], legacy[0]["last_updated"])
 
 
-class MigrationScriptTests(TemporaryDatabaseTestCase):
-    def test_verified_migration_backs_up_and_removes_temporary_source(self):
-        migrate_module = load_bin_module("migrate_json_to_sqlite")
-        isolated_project_root = self.root / "isolated-project"
-        isolated_project_root.mkdir()
-        source = isolated_project_root / "legacy.json"
-        source_records = [
+class ParseDatetimeTests(unittest.TestCase):
+    def test_parse_datetime_accepts_z_suffix(self):
+        parsed = database.parse_datetime("2026-03-01T12:00:00Z")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.utcoffset(), timezone.utc.utcoffset(None))
+
+    def test_parse_datetime_returns_none_for_invalid(self):
+        self.assertIsNone(database.parse_datetime("not-a-date"))
+        self.assertIsNone(database.parse_datetime(""))
+        self.assertIsNone(database.parse_datetime(None))
+
+
+class GmailFilterTests(unittest.TestCase):
+    def test_build_gmail_involvement_filter_escapes_quotes(self):
+        fragment = database.build_gmail_involvement_filter('recruiter@"evil".com')
+        self.assertIn('\\"', fragment)
+        self.assertIn('to:"recruiter@\\"evil\\".com"', fragment)
+
+
+class EmailFilterTests(unittest.TestCase):
+    def test_normalize_email_filter_rejects_invalid(self):
+        with self.assertRaises(ValueError):
+            database.normalize_email_filter("not-an-email")
+
+
+class DatabasePathTests(TemporaryDatabaseTestCase):
+    def test_get_database_path_honors_env_vars(self):
+        explicit = self.root / "custom.sqlite3"
+        self.assertEqual(database.get_database_path(explicit), explicit)
+
+        db_env = self.root / "from-db-env.sqlite3"
+        data_env = self.root / "data-dir"
+        with mock.patch.dict(
+            os.environ,
             {
-                "thread_id": "migration-thread",
-                "company": "Migration Co",
-                "first_seen": "2022-05-06T07:08:09+00:00",
-                "last_updated": "2023-06-07T08:09:10+00:00",
-            }
-        ]
-        source_bytes = json.dumps(source_records, ensure_ascii=False).encode("utf-8")
-        source.write_bytes(source_bytes)
-
-        with mock.patch.object(migrate_module, "ROOT", isolated_project_root):
-            result = migrate_module.migrate(
-                source=source, db_path=self.db_path, remove_source=True
+                "INTERVIEW_TRACKER_DB": str(db_env),
+                "INTERVIEW_TRACKER_DATA_DIR": str(data_env),
+            },
+            clear=False,
+        ):
+            self.assertEqual(database.get_database_path(), db_env)
+            self.assertEqual(
+                database.get_database_path(None),
+                db_env,
             )
 
-        self.assertEqual(result["status"], "migrated")
-        self.assertTrue(result["source_removed"])
-        self.assertFalse(source.exists())
-        backup = Path(result["backup"])
-        self.assertTrue(backup.is_file())
-        self.assertEqual(backup.read_bytes(), source_bytes)
-        migrated = database.get_records(self.db_path)
-        self.assertEqual(len(migrated), 1)
-        self.assertEqual(migrated[0]["first_seen"], source_records[0]["first_seen"])
-        self.assertEqual(migrated[0]["last_updated"], source_records[0]["last_updated"])
-        summary = database.get_latest_summary(self.db_path)
-        self.assertIsNotNone(summary)
-        self.assertEqual(summary["total"], 1)
-        self.assertIsNone(database.get_last_successful_scan_date(self.db_path))
-
-
-class DashboardRenderingTests(unittest.TestCase):
-    def test_render_embeds_json_replaces_tokens_and_escapes_script_closers(self):
-        merge_module = load_bin_module("merge_interviews")
-        with tempfile.TemporaryDirectory() as temp_dir:
-            template = Path(temp_dir) / "template.html"
-            template.write_text(
-                '<p>__GENERATED_AT__</p><script id="data">__DATA_JSON__</script>',
-                encoding="utf-8",
-            )
-            records = [
-                {
-                    "company": "Closing </script><script>alert(1)</script>",
-                    "notes": "embedded JSON",
-                }
-            ]
-
-            with mock.patch.object(merge_module, "TEMPLATE_FILE", template):
-                rendered = merge_module.render_dashboard(records)
-
-        self.assertNotIn("__DATA_JSON__", rendered)
-        self.assertNotIn("__GENERATED_AT__", rendered)
-        self.assertIn('"notes": "embedded JSON"', rendered)
-        self.assertIn("<\\/script>", rendered)
-        self.assertNotIn("</script><script>alert(1)</script>", rendered)
-        self.assertRegex(rendered, r"<p>.+</p>")
+        with mock.patch.dict(
+            os.environ,
+            {"INTERVIEW_TRACKER_DB": "", "INTERVIEW_TRACKER_DATA_DIR": str(data_env)},
+            clear=False,
+        ):
+            os.environ.pop("INTERVIEW_TRACKER_DB", None)
+            expected = data_env / database.DEFAULT_DB_NAME
+            self.assertEqual(database.get_database_path(), expected)
 
 
 class SettingsTests(TemporaryDatabaseTestCase):
@@ -327,96 +350,6 @@ class SettingsTests(TemporaryDatabaseTestCase):
         config = database.get_scan_config(self.db_path)
         self.assertEqual(config["email_filter"], "recruiter@example.com")
         self.assertIn("recruiter@example.com", config["gmail_involvement_filter"])
-
-
-class SchedulerTests(TemporaryDatabaseTestCase):
-    def test_build_plist_from_database(self):
-        database.initialize_database(self.db_path)
-        scheduler_module = load_bin_module("scheduler")
-        plist = scheduler_module.build_plist_dict(
-            PROJECT_ROOT,
-            Path.home(),
-            self.root / "private",
-            database.get_enabled_scan_intervals(self.db_path),
-        )
-        self.assertEqual(
-            plist["StartCalendarInterval"],
-            [{"Hour": 9, "Minute": 0}, {"Hour": 20, "Minute": 0}],
-        )
-        database.set_scan_schedule(["07:15"], self.db_path)
-        plist = scheduler_module.build_plist_dict(
-            PROJECT_ROOT,
-            Path.home(),
-            self.root / "private",
-            database.get_enabled_scan_intervals(self.db_path),
-        )
-        self.assertEqual(plist["StartCalendarInterval"], [{"Hour": 7, "Minute": 15}])
-        database.set_scan_schedule([], self.db_path)
-        plist = scheduler_module.build_plist_dict(
-            PROJECT_ROOT,
-            Path.home(),
-            self.root / "private",
-            database.get_enabled_scan_intervals(self.db_path),
-        )
-        self.assertNotIn("StartCalendarInterval", plist)
-
-
-class LocalServerTests(unittest.TestCase):
-    def test_settings_get_and_put_require_csrf(self):
-        local_server_module = load_bin_module("local_server")
-        with tempfile.TemporaryDirectory() as temp_dir:
-            data_dir = Path(temp_dir)
-            db_path = data_dir / "interview_tracker.sqlite3"
-            with mock.patch.object(local_server_module, "DATA_DIR", data_dir), mock.patch.object(
-                local_server_module.database, "get_database_path", return_value=db_path
-            ), mock.patch.object(local_server_module, "DB_FILE", db_path), mock.patch.object(
-                local_server_module.scheduler,
-                "apply_settings_with_rollback",
-                return_value={"status": "ok", "email": "", "scan_times": ["10:00"], "max_scan_times": 5},
-            ):
-                local_server_module.database.initialize_database(db_path)
-                port = local_server_module.start_local_server()
-                try:
-                    import http.client
-                    import json
-
-                    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-                    conn.request("GET", "/settings")
-                    response = conn.getresponse()
-                    self.assertEqual(response.status, 200)
-                    response.read()
-                    csrf_cookie = ""
-                    for header, value in response.getheaders():
-                        if header.lower() == "set-cookie":
-                            csrf_cookie = value.split("=", 1)[1].split(";", 1)[0]
-                    conn.request("GET", "/api/settings")
-                    settings_response = conn.getresponse()
-                    self.assertEqual(settings_response.status, 200)
-                    settings_response.read()
-                    conn.request(
-                        "PUT",
-                        "/api/settings",
-                        body=json.dumps({"email": "", "scan_times": ["10:00"]}),
-                        headers={"Content-Type": "application/json"},
-                    )
-                    blocked = conn.getresponse()
-                    self.assertEqual(blocked.status, 403)
-                    conn.request(
-                        "PUT",
-                        "/api/settings",
-                        body=json.dumps({"email": "", "scan_times": ["10:00"]}),
-                        headers={
-                            "Content-Type": "application/json",
-                            "Cookie": f"it_csrf={csrf_cookie}",
-                            "X-CSRF-Token": csrf_cookie,
-                            "Origin": f"http://127.0.0.1:{port}",
-                        },
-                    )
-                    ok = conn.getresponse()
-                    self.assertEqual(ok.status, 200)
-                    conn.close()
-                finally:
-                    local_server_module.stop_local_server()
 
 
 if __name__ == "__main__":

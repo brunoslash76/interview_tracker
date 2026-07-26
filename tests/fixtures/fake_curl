@@ -1,0 +1,12 @@
+#!/bin/bash
+# Fake curl for tests — records body and headers to CURL_LOG.
+: "${CURL_LOG:?CURL_LOG must be set}"
+{
+  echo "--- curl invocation ---"
+  echo "args: $*"
+  while IFS= read -r line; do
+    echo "body: ${line}"
+  done
+} >> "${CURL_LOG}"
+echo "200"
+exit 0

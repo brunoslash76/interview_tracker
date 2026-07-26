@@ -1,0 +1,5 @@
+#!/bin/bash
+# Fake terminal-notifier for tests — writes args to NOTIFY_LOG.
+: "${NOTIFY_LOG:?NOTIFY_LOG must be set}"
+printf '%s\n' "$@" >> "${NOTIFY_LOG}"
+exit 0
