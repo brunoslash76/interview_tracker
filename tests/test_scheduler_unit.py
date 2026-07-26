@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import plistlib
 import json
+import plistlib
+import sys
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -11,6 +12,7 @@ from unittest import mock
 from tests.support import PROJECT_ROOT, TemporaryDatabaseTestCase, database, load_bin_module
 
 
+@unittest.skipUnless(sys.platform == "darwin", "launchd scheduler tests")
 class BuildPlistTests(TemporaryDatabaseTestCase):
     def test_build_plist_from_database(self):
         database.initialize_database(self.db_path)
@@ -43,20 +45,22 @@ class BuildPlistTests(TemporaryDatabaseTestCase):
         self.assertNotIn("StartCalendarInterval", plist)
 
 
+@unittest.skipUnless(sys.platform == "darwin", "launchd scheduler tests")
 class WritePlistTests(TemporaryDatabaseTestCase):
     def test_write_plist_writes_and_lints_at_temp_path(self):
         scheduler_module = load_bin_module("scheduler")
+        backend = scheduler_module._backend
         plist_path = self.root / "LaunchAgents" / "com.interview-tracker.scheduler.plist"
         sample = scheduler_module.build_plist_dict(
             PROJECT_ROOT, self.home_dir, self.data_dir, [(9, 0)]
         )
-        with mock.patch.object(scheduler_module, "_installed_plist_path", return_value=plist_path):
-            scheduler_module.write_plist(plist_path, sample)
+        backend.write_plist(plist_path, sample)
         self.assertTrue(plist_path.is_file())
         loaded = plistlib.loads(plist_path.read_bytes())
         self.assertEqual(loaded["Label"], sample["Label"])
 
 
+@unittest.skipUnless(sys.platform == "darwin", "launchd scheduler tests")
 class ApplySettingsTests(TemporaryDatabaseTestCase):
     def test_apply_settings_with_rollback_success(self):
         database.initialize_database(self.db_path)
@@ -83,6 +87,7 @@ class ApplySettingsTests(TemporaryDatabaseTestCase):
         database.set_scan_email_filter("before@example.com", self.db_path)
         database.set_scan_schedule(["08:00"], self.db_path)
         scheduler_module = load_bin_module("scheduler")
+        backend = scheduler_module._backend
         plist_path = self.root / "agent.plist"
         plist_path.parent.mkdir(parents=True, exist_ok=True)
         backup_bytes = b"<?xml version='1.0'?><plist version='1.0'><dict></dict></plist>"
@@ -92,11 +97,11 @@ class ApplySettingsTests(TemporaryDatabaseTestCase):
             raise RuntimeError("launchctl failed")
 
         with mock.patch.object(
-            scheduler_module, "_installed_plist_path", return_value=plist_path
+            backend, "_installed_plist_path", return_value=plist_path
         ), mock.patch.object(scheduler_module, "sync_scheduler", side_effect=failing_sync), mock.patch.object(
-            scheduler_module, "bootout_scheduler"
+            backend, "bootout_scheduler"
         ), mock.patch.object(
-            scheduler_module, "bootstrap_scheduler"
+            backend, "bootstrap_scheduler"
         ) as bootstrap_mock:
             with self.assertRaises(RuntimeError):
                 scheduler_module.apply_settings_with_rollback(
@@ -114,15 +119,17 @@ class ApplySettingsTests(TemporaryDatabaseTestCase):
         bootstrap_mock.assert_called_once()
 
 
+@unittest.skipUnless(sys.platform == "darwin", "launchd scheduler tests")
 class SyncSchedulerTests(TemporaryDatabaseTestCase):
     def test_sync_scheduler_without_load_writes_plist_only(self):
         database.initialize_database(self.db_path)
         scheduler_module = load_bin_module("scheduler")
+        backend = scheduler_module._backend
         plist_path = self.root / "LaunchAgents" / "scheduler.plist"
         with mock.patch.object(
-            scheduler_module, "_installed_plist_path", return_value=plist_path
-        ), mock.patch.object(scheduler_module, "bootout_scheduler") as bootout, mock.patch.object(
-            scheduler_module, "bootstrap_scheduler"
+            backend, "_installed_plist_path", return_value=plist_path
+        ), mock.patch.object(backend, "bootout_scheduler") as bootout, mock.patch.object(
+            backend, "bootstrap_scheduler"
         ) as bootstrap:
             result = scheduler_module.sync_scheduler(
                 PROJECT_ROOT,
@@ -138,14 +145,15 @@ class SyncSchedulerTests(TemporaryDatabaseTestCase):
 
     def test_bootstrap_falls_back_to_legacy_load(self):
         scheduler_module = load_bin_module("scheduler")
+        backend = scheduler_module._backend
         installed = self.root / "scheduler.plist"
         bootstrap_result = mock.Mock(returncode=5)
         with mock.patch.object(
-            scheduler_module.subprocess,
+            backend.subprocess,
             "run",
             side_effect=[bootstrap_result, mock.Mock(returncode=0)],
         ) as run:
-            scheduler_module.bootstrap_scheduler(installed)
+            backend.bootstrap_scheduler(installed)
 
         self.assertEqual(run.call_count, 2)
         self.assertEqual(run.call_args_list[1].args[0][:2], ["/bin/launchctl", "load"])

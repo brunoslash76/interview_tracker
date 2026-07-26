@@ -4,6 +4,7 @@ source =
     bin
 omit =
     bin/menubar_app.py
+    bin/tray_app.py
 concurrency = thread
 
 [report]
