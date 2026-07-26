@@ -69,10 +69,12 @@ def _merge_module():
     return module
 
 
-def render_dashboard_html() -> str:
+def render_dashboard_html(csrf_token: str = "") -> str:
     merge = _merge_module()
     records = database.get_records(DB_FILE)
-    return merge.render_dashboard(records)
+    return merge.render_dashboard(records).replace(
+        "__CSRF_TOKEN__", html.escape(csrf_token, quote=True)
+    )
 
 
 def render_settings_html(csrf_token: str) -> str:
@@ -180,7 +182,7 @@ class InterviewTrackerHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if path == "/dashboard":
-            self._send_html(HTTPStatus.OK, render_dashboard_html())
+            self._send_html(HTTPStatus.OK, render_dashboard_html(self.csrf_token))
             return
         if path == "/settings":
             self._send_html(HTTPStatus.OK, render_settings_html(self.csrf_token))

@@ -296,11 +296,13 @@ button.nav:disabled{opacity:.4;cursor:not-allowed}
     </div>
   </div>
 </div>
+<input type="hidden" id="csrfToken" value="__CSRF_TOKEN__">
 
 <script type="application/json" id="interview-data">__DATA_JSON__</script>
 <script>
 const ALL = JSON.parse(document.getElementById('interview-data').textContent);
 const STAGES=["Initial Contact","Phone Screen","Technical Round","Final Interview","Offer"];
+const $=id=>document.getElementById(id);
 
 const SCAN_QUIPS = [
   "Going through a lot of spam here… what's up with that?",
@@ -329,8 +331,7 @@ let quipTimer = null;
 let scanStartedAt = null;
 
 function csrfToken(){
-  const m = document.cookie.match(/(?:^|;\s*)it_csrf=([^;]+)/);
-  return m ? decodeURIComponent(m[1]) : '';
+  return $('csrfToken').value;
 }
 function openScanModal(){
   const m = $('scanModal');
@@ -542,7 +543,6 @@ ALL.forEach(r=>{ r._act=actionInfo(r); r._age=ageOf(emailSrc(r)); });
 
 /* ---------- state ---------- */
 let page=1, per=10, quick='', sortKey='email', sortDir=-1, view=ALL.slice();
-const $=id=>document.getElementById(id);
 
 /* ---------- stats ---------- */
 function computeStats(){
