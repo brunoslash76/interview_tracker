@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.interview-tracker.notifier</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__ROOT__/bin/macos_notifier.sh</string>
+        <string>check</string>
+    </array>
+
+    <!-- Wake ONLY when the store actually changes on disk — no polling. -->
+    <key>WatchPaths</key>
+    <array>
+        <string>__DATA_DIR__/interview_tracker.sqlite3</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>__DATA_DIR__/logs/notifier.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__DATA_DIR__/logs/notifier.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>INTERVIEW_TRACKER_DATA_DIR</key>
+        <string>__DATA_DIR__</string>
+    </dict>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
