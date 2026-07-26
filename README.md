@@ -387,6 +387,30 @@ CI runs the same commands on **`macos-latest`** via
 The badge at the top of this README reflects that workflow on the `main` branch
 (passes when unit and integration tests succeed on GitHub’s macOS runners).
 
+### Git hooks
+
+The installer enables the version-controlled hooks in `.githooks/`:
+
+- `pre-commit` runs shell/plist validation plus unit and dashboard component
+  tests;
+- `pre-push` runs the same checks plus the macOS integration suite.
+
+Enable them without reinstalling the app:
+
+```sh
+bash scripts/install_git_hooks.sh
+```
+
+Run either check set directly:
+
+```sh
+bash scripts/run_checks.sh quick
+bash scripts/run_checks.sh full
+```
+
+A failed check blocks the commit or push. Git’s standard `--no-verify` option
+remains available for emergencies, but CI still runs the full suite.
+
 ## Troubleshooting
 
 - **Claude CLI not found:** run `which claude`, put that path in the private
