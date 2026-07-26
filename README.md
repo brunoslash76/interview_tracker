@@ -1,5 +1,7 @@
 # Interview Tracker
 
+[![Tests](https://github.com/brunoslash76/interview_tracker/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/brunoslash76/interview_tracker/actions/workflows/tests.yml)
+
 Interview Tracker is a local macOS automation that scans Gmail for job-interview
 threads, merges structured results into a private SQLite database, renders an
 HTML dashboard, and sends change-aware notifications. A lightweight Python
@@ -347,12 +349,38 @@ were already committed.
 
 ## Tests
 
+The suite uses **stdlib `unittest` only** (no pytest). Tests never call live
+Claude/Gmail, ntfy, or your private
+`~/Library/Application Support/InterviewTracker` data. Integration tests set
+temporary `HOME` and `INTERVIEW_TRACKER_DATA_DIR` and use fixture fakes under
+[`tests/fixtures/`](/Users/bruno/Automations/email-reader/tests/fixtures/).
+
 ```sh
+# All tests
 python3 -m unittest discover -s tests -v
+
+# Unit tests only
+python3 -m unittest discover -s tests -p 'test_*_unit.py' -v
+
+# Integration tests (macOS; shell + settings end-to-end)
+python3 -m unittest discover -s tests -p 'test_integration_*.py' -v
 ```
 
-Tests use temporary databases and do not access Gmail or the private runtime
-database.
+| Area | Files |
+|------|--------|
+| SQLite, settings, merge | `tests/test_database_unit.py` |
+| Scheduler plist + rollback | `tests/test_scheduler_unit.py` |
+| Loopback HTTP / CSRF | `tests/test_local_server_unit.py` |
+| Legacy migration | `tests/test_migration_unit.py` |
+| Dashboard render / CLI | `tests/test_merge_unit.py` |
+| Menu-bar heuristics | `tests/test_menubar_logic_unit.py` |
+| Scan, notifier, plist (Darwin) | `tests/test_integration_shell.py` |
+| Settings → DB → plist | `tests/test_integration_settings.py` |
+
+CI runs the same commands on **`macos-latest`** via
+[`.github/workflows/tests.yml`](/Users/bruno/Automations/email-reader/.github/workflows/tests.yml).
+The badge at the top of this README reflects that workflow on the `main` branch
+(passes when unit and integration tests succeed on GitHub’s macOS runners).
 
 ## Troubleshooting
 
