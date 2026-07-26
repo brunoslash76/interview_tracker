@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -80,6 +81,44 @@ class MergeMainTests(TemporaryDatabaseTestCase):
         self.assertTrue(dashboard.is_file())
         self.assertIn("Render Co", dashboard.read_text(encoding="utf-8"))
         self.assertIn("rendered:", buffer.getvalue())
+
+    def test_main_merges_structured_extraction_and_watermark(self):
+        merge_module = load_bin_module("merge_interviews")
+        database.initialize_database(self.db_path)
+        extraction = self.root / "extraction.json"
+        extraction.write_text(
+            json.dumps(
+                {
+                    "interviews": [
+                        {
+                            "thread_id": "watermark-thread",
+                            "company": "Watermark Co",
+                            "stage": "Initial Contact",
+                            "status": "Active",
+                        }
+                    ],
+                    "latest_email_date_seen": "2026-07-25T21:49:00Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+        template = self.root / "template.html"
+        template.write_text("__GENERATED_AT__ __DATA_JSON__", encoding="utf-8")
+
+        with mock.patch.object(merge_module, "DATA_DIR", self.data_dir), mock.patch.object(
+            merge_module, "DB_FILE", self.db_path
+        ), mock.patch.object(merge_module, "TEMPLATE_FILE", template), mock.patch.object(
+            merge_module, "DASHBOARD_FILE", self.data_dir / "dashboard.html"
+        ), mock.patch.object(
+            sys, "argv", ["merge_interviews.py", str(extraction)]
+        ):
+            merge_module.main()
+
+        self.assertEqual(len(database.get_records(self.db_path)), 1)
+        self.assertEqual(
+            database.get_latest_email_watermark(self.db_path),
+            "2026-07-25T21:49:00+00:00",
+        )
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from support import (
@@ -97,6 +98,36 @@ class ShellIntegrationTests(IsolatedRuntimeTestCase):
         self.assertEqual(result.returncode, 2)
         self.assertLess(elapsed, 5.0)
         self.assertTrue(lock_dir.is_dir())
+
+    def test_recent_scan_uses_exact_watermark_guardrail_in_claude_prompt(self):
+        now = datetime.now(timezone.utc)
+        watermark = now - timedelta(minutes=12)
+        database.merge_scan(
+            [],
+            self.db_path,
+            timestamp=(now - timedelta(minutes=5)).isoformat(),
+            latest_email_date_seen=watermark.isoformat(),
+        )
+        interviews = json.loads(
+            (FIXTURES_DIR / "sample_interviews.json").read_text(encoding="utf-8")
+        )
+        fake_claude = write_fake_claude(self.root / "fake_claude", interviews)
+        args_log = self.data_dir / "claude_args.log"
+
+        result = self.run_shell(
+            self.scan_script,
+            extra_env={
+                "CLAUDE_BIN": str(fake_claude),
+                "CLAUDE_ARGS_LOG": str(args_log),
+            },
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr + result.stdout)
+        claude_args = args_log.read_text(encoding="utf-8")
+        expected_query = f"after:{int(watermark.timestamp())}"
+        self.assertIn(expected_query, claude_args)
+        self.assertIn("EVERY search query MUST include", claude_args)
+        self.assertIn("RECENT-SCAN GUARDRAIL", claude_args)
 
     def _notifier_fake_bin(self) -> Path:
         fake_bin = self.root / "fakebin"

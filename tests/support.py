@@ -73,11 +73,25 @@ def write_fake_claude(output_path: Path, interviews: list[dict[str, Any]]) -> Pa
     """Create an executable fake claude that prints the scan_gmail.sh envelope."""
     import json
 
-    inner = json.dumps({"interviews": interviews})
+    dates = [
+        str(record["last_email_date"])
+        for record in interviews
+        if record.get("last_email_date")
+    ]
+    inner = json.dumps(
+        {
+            "interviews": interviews,
+            "latest_email_date_seen": max(dates) if dates else None,
+        }
+    )
     envelope = json.dumps({"result": inner})
-    script = FIXTURES_DIR / f"fake_claude_{output_path.name}.sh"
+    script = output_path
+    script.parent.mkdir(parents=True, exist_ok=True)
     script.write_text(
         f"""#!/bin/bash
+if [[ -n "${{CLAUDE_ARGS_LOG:-}}" ]]; then
+  printf '%s\\n' "$@" > "${{CLAUDE_ARGS_LOG}}"
+fi
 cat <<'EOF'
 {envelope}
 EOF

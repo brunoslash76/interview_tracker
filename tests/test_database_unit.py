@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 from tests.support import TemporaryDatabaseTestCase, database
@@ -245,6 +245,73 @@ class SummaryTests(TemporaryDatabaseTestCase):
         database.merge_scan([], self.db_path, scan_date="2026-01-15")
         self.assertEqual(
             database.get_last_successful_scan_date(self.db_path), "2026-01-15"
+        )
+
+
+class ScanWindowTests(TemporaryDatabaseTestCase):
+    def test_recent_scan_uses_exact_latest_email_epoch(self):
+        now = datetime(2026, 7, 25, 22, 0, tzinfo=timezone.utc)
+        watermark = "2026-07-25T21:48:30+00:00"
+        database.merge_scan(
+            [],
+            self.db_path,
+            timestamp=(now - timedelta(minutes=10)).isoformat(),
+            scan_date="2026-07-25",
+            latest_email_date_seen=watermark,
+        )
+
+        window = database.get_scan_window(self.db_path, now=now)
+
+        self.assertTrue(window["recent"])
+        self.assertEqual(window["mode"], "recent-watermark")
+        self.assertEqual(
+            window["query"],
+            f"after:{int(datetime.fromisoformat(watermark).timestamp())}",
+        )
+        self.assertEqual(window["latest_email_watermark"], watermark)
+
+    def test_stale_scan_uses_five_day_overlap(self):
+        now = datetime(2026, 7, 25, 22, 0, tzinfo=timezone.utc)
+        database.merge_scan(
+            [],
+            self.db_path,
+            timestamp=(now - timedelta(minutes=30)).isoformat(),
+            scan_date="2026-07-25",
+            latest_email_date_seen="2026-07-25T21:00:00+00:00",
+        )
+
+        window = database.get_scan_window(self.db_path, now=now)
+
+        self.assertFalse(window["recent"])
+        self.assertEqual(window["mode"], "overlap")
+        self.assertEqual(window["query"], "after:2026/07/20")
+
+    def test_first_scan_uses_120_day_window(self):
+        now = datetime(2026, 7, 25, 22, 0, tzinfo=timezone.utc)
+        database.initialize_database(self.db_path)
+
+        window = database.get_scan_window(self.db_path, now=now)
+
+        self.assertEqual(window["query"], "after:2026/03/27")
+        self.assertFalse(window["recent"])
+
+    def test_email_watermark_never_moves_backwards(self):
+        database.merge_scan(
+            [],
+            self.db_path,
+            timestamp="2026-07-25T21:50:00+00:00",
+            latest_email_date_seen="2026-07-25T21:49:00+00:00",
+        )
+        database.merge_scan(
+            [],
+            self.db_path,
+            timestamp="2026-07-25T21:55:00+00:00",
+            latest_email_date_seen="2026-07-25T21:40:00+00:00",
+        )
+
+        self.assertEqual(
+            database.get_latest_email_watermark(self.db_path),
+            "2026-07-25T21:49:00+00:00",
         )
 
 
