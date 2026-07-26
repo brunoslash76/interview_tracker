@@ -193,7 +193,79 @@ class LocalServerHttpTests(unittest.TestCase):
             response.read()
             conn.close()
 
-    def test_oversize_body_returns_400(self):
+    def test_get_api_scan_status(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            port, conn = self._start(Path(temp_dir))
+            conn.request("GET", "/api/scan/status", headers={"Host": f"127.0.0.1:{port}"})
+            response = conn.getresponse()
+            self.assertEqual(response.status, 200)
+            payload = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(payload["state"], "idle")
+            conn.close()
+
+    def test_post_api_scan_requires_csrf(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            port, conn = self._start(Path(temp_dir))
+            conn.request(
+                "POST",
+                "/api/scan",
+                body="{}",
+                headers={
+                    "Content-Type": "application/json",
+                    "Host": f"127.0.0.1:{port}",
+                    "Origin": f"http://127.0.0.1:{port}",
+                },
+            )
+            response = conn.getresponse()
+            self.assertEqual(response.status, 403)
+            response.read()
+            conn.close()
+
+    def test_post_api_scan_starts_with_csrf(self):
+        import tempfile
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            port, conn = self._start(Path(temp_dir))
+            csrf = self._csrf_from_settings_page(conn, port)
+            fake_runner = mock.Mock()
+            fake_runner.start.return_value = (True, {"state": "running", "phase": "starting"})
+            with mock.patch.object(self.local_server_module, "get_scan_runner", return_value=fake_runner):
+                conn.request(
+                    "POST",
+                    "/api/scan",
+                    body="{}",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Host": f"127.0.0.1:{port}",
+                        "Origin": f"http://127.0.0.1:{port}",
+                        "Cookie": f"it_csrf={csrf}",
+                        "X-CSRF-Token": csrf,
+                    },
+                )
+                response = conn.getresponse()
+                self.assertEqual(response.status, 202)
+                payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(payload["status"]["state"], "running")
+            conn.close()
+
+    def test_get_api_dashboard_data(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            port, conn = self._start(Path(temp_dir))
+            conn.request("GET", "/api/dashboard-data", headers={"Host": f"127.0.0.1:{port}"})
+            response = conn.getresponse()
+            self.assertEqual(response.status, 200)
+            payload = json.loads(response.read().decode("utf-8"))
+            self.assertIn("records", payload)
+            self.assertIn("generated_at", payload)
+            conn.close()
+
         import tempfile
 
         with tempfile.TemporaryDirectory() as temp_dir:

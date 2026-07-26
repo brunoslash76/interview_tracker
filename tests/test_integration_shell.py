@@ -77,6 +77,11 @@ class ShellIntegrationTests(IsolatedRuntimeTestCase):
         self.assertTrue(dashboard.is_file())
         self.assertIn("Fixture Co", dashboard.read_text(encoding="utf-8"))
 
+        progress = self.data_dir / ".scan_progress.json"
+        self.assertTrue(progress.is_file())
+        phase = json.loads(progress.read_text(encoding="utf-8")).get("phase")
+        self.assertEqual(phase, "complete")
+
         lock_dir = self.data_dir / "scan.lock"
         self.assertFalse(lock_dir.exists())
 
@@ -89,7 +94,7 @@ class ShellIntegrationTests(IsolatedRuntimeTestCase):
         result = self.run_shell(self.scan_script)
         elapsed = time.monotonic() - start
 
-        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 2)
         self.assertLess(elapsed, 5.0)
         self.assertTrue(lock_dir.is_dir())
 
