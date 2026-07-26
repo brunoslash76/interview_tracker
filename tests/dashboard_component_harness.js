@@ -37,6 +37,7 @@ class Element {
     this.options = [];
     this.classList = new ClassList();
     this.attributes = new Map();
+    this.listeners = new Map();
     this.onclick = null;
   }
   set innerHTML(value) {
@@ -51,7 +52,13 @@ class Element {
   getAttribute(name) {
     return this.attributes.get(name) || null;
   }
-  addEventListener() {}
+  addEventListener(name, callback) {
+    this.listeners.set(name, callback);
+  }
+  dispatch(name, event = {}) {
+    const callback = this.listeners.get(name);
+    if (callback) callback(event);
+  }
   insertAdjacentHTML() {}
   querySelector() {
     return new Element();
@@ -64,7 +71,7 @@ class Element {
 
 function extractDashboardScript(html) {
   const matches = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)];
-  assert.ok(matches.length >= 2, "expected dashboard data and application scripts");
+  assert.ok(matches.length >= 1, "expected an inline application script");
   return matches[matches.length - 1][1];
 }
 
@@ -72,7 +79,8 @@ function createHarness() {
   const html = fs
     .readFileSync(process.argv[2], "utf8")
     .replace("__DATA_JSON__", "[]")
-    .replace("__CSRF_TOKEN__", "component-test-token");
+    .replace("__CSRF_TOKEN__", "component-test-token")
+    .replaceAll("__MAX_SCAN_TIMES__", "5");
   const elements = new Map();
   const getElement = (id) => {
     if (!elements.has(id)) elements.set(id, new Element(id));
@@ -88,6 +96,7 @@ function createHarness() {
     getElementById: getElement,
     querySelectorAll: () => [],
     querySelector: () => new Element(),
+    createElement: () => new Element(),
     addEventListener: () => {},
   };
 
@@ -175,6 +184,17 @@ async function main() {
     assert.equal(post.options.headers["X-CSRF-Token"], "component-test-token");
     assert.equal(getElement("scanModal").classList.contains("open"), true);
     assert.equal(button.disabled, true);
+    return;
+  }
+
+  if (scenario === "settings-theme") {
+    const theme = getElement("theme");
+    assert.equal(theme.listeners.has("click"), true, "settings theme handler should be wired");
+    assert.equal(getElement("themeLabel").textContent, "Dark");
+    theme.dispatch("click");
+    assert.equal(documentElement.getAttribute("data-theme"), "dark");
+    assert.equal(getElement("themeIcon").textContent, "☀️");
+    assert.equal(getElement("themeLabel").textContent, "Light");
     return;
   }
 
