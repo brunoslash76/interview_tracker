@@ -38,3 +38,6 @@ dashboard.html
 # Atomic-write and test artifacts
 *.tmp
 .coverage
+coverage.json
+coverage.xml
+htmlcov/

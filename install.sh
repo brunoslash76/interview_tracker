@@ -81,6 +81,7 @@ install_python_dependencies() {
   echo "Installing menu-bar dependencies (pip, rumps, pyobjc)…"
   "${ROOT}/venv/bin/python3" -m pip install --quiet --upgrade pip
   "${ROOT}/venv/bin/python3" -m pip install --quiet rumps pyobjc
+  "${ROOT}/venv/bin/python3" -m pip install --quiet -r "${ROOT}/requirements-dev.txt"
   echo "Python dependencies installed."
 }
 
@@ -110,11 +111,19 @@ else
   mkdir -p "${DATA_DIR}/logs" "${AGENT_DIR}"
 fi
 
+if ! "${ROOT}/venv/bin/python3" -m coverage --version >/dev/null 2>&1; then
+  echo "Installing development coverage tooling…"
+  "${ROOT}/venv/bin/python3" -m pip install --quiet -r "${ROOT}/requirements-dev.txt"
+fi
+
 # --- permissions + folders --------------------------------------------------
 chmod +x "${ROOT}/bin/scan_gmail.sh" "${ROOT}/bin/macos_notifier.sh" \
          "${ROOT}/bin/merge_interviews.py" "${ROOT}/bin/menubar_app.py" \
          "${ROOT}/bin/migrate_json_to_sqlite.py" "${ROOT}/bin/scheduler.py" \
          "${ROOT}/bin/local_server.py" \
+         "${ROOT}/scripts/install_git_hooks.sh" "${ROOT}/scripts/run_checks.sh" \
+         "${ROOT}/scripts/generate_coverage_badge.py" \
+         "${ROOT}/.githooks/pre-commit" "${ROOT}/.githooks/pre-push" \
          "${ROOT}/InterviewTracker.app/Contents/MacOS/InterviewTracker"
 
 echo "Initializing private database…"

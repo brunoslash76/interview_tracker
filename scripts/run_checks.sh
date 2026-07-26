@@ -14,6 +14,12 @@ esac
 
 cd "${ROOT}"
 
+if [ -x "${ROOT}/venv/bin/python3" ]; then
+  PYTHON="${ROOT}/venv/bin/python3"
+else
+  PYTHON="$(command -v python3)"
+fi
+
 echo "Validating shell scripts…"
 bash -n install.sh
 bash -n bin/scan_gmail.sh
@@ -36,12 +42,34 @@ fi
 echo "Validating dashboard component harness…"
 node --check tests/dashboard_component_harness.js
 
-echo "Running unit and component tests…"
-python3 -m unittest discover -s tests -p 'test_*_unit.py' -v
+if [ "${MODE}" = "quick" ]; then
+  echo "Running unit and component tests…"
+  "${PYTHON}" -m unittest discover -s tests -p 'test_*_unit.py' -v
+else
+  if ! "${PYTHON}" -m coverage --version >/dev/null 2>&1; then
+    echo "ERROR: coverage.py is required for full pre-push checks." >&2
+    echo "Run: ${PYTHON} -m pip install -r requirements-dev.txt" >&2
+    exit 1
+  fi
 
-if [ "${MODE}" = "full" ]; then
-  echo "Running integration tests…"
-  python3 -m unittest discover -s tests -p 'test_integration_*.py' -v
+  echo "Running unit and component tests with coverage…"
+  "${PYTHON}" -m coverage erase
+  "${PYTHON}" -m coverage run -m unittest discover -s tests -p 'test_*_unit.py' -v
+
+  echo "Running integration tests with coverage…"
+  "${PYTHON}" -m coverage run --append \
+    -m unittest discover -s tests -p 'test_integration_*.py' -v
+
+  echo "Enforcing Python coverage threshold…"
+  "${PYTHON}" -m coverage report --fail-under=80
+  "${PYTHON}" -m coverage xml
+  "${PYTHON}" -m coverage json -o coverage.json
+  "${PYTHON}" scripts/generate_coverage_badge.py coverage.json coverage.svg
+
+  if ! git diff --quiet HEAD -- coverage.svg; then
+    echo "ERROR: coverage.svg changed. Commit the refreshed README badge." >&2
+    exit 1
+  fi
 fi
 
 echo "All ${MODE} checks passed."

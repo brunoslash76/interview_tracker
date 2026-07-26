@@ -1,0 +1,17 @@
+[run]
+branch = True
+source =
+    bin
+omit =
+    bin/menubar_app.py
+concurrency = thread
+
+[report]
+exclude_also =
+    if __name__ == .__main__.:
+    raise NotImplementedError
+show_missing = True
+skip_covered = True
+
+[xml]
+output = coverage.xml

@@ -1,6 +1,7 @@
 # Interview Tracker
 
 [![Tests](https://github.com/brunoslash76/interview_tracker/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/brunoslash76/interview_tracker/actions/workflows/tests.yml)
+![Python coverage](coverage.svg)
 
 Interview Tracker is a local macOS automation that scans Gmail for job-interview
 threads, merges structured results into a private SQLite database, renders an
@@ -354,8 +355,8 @@ were already committed.
 
 ## Tests
 
-The suite uses **stdlib `unittest` only** (no pytest). Tests never call live
-Claude/Gmail, ntfy, or your private
+The suite uses **stdlib `unittest`** for test cases and `coverage.py` for Python
+line/branch measurement. Tests never call live Claude/Gmail, ntfy, or your private
 `~/Library/Application Support/InterviewTracker` data. Integration tests set
 temporary `HOME` and `INTERVIEW_TRACKER_DATA_DIR` and use fixture fakes under
 [`tests/fixtures/`](/Users/bruno/Automations/email-reader/tests/fixtures/).
@@ -369,6 +370,10 @@ python3 -m unittest discover -s tests -p 'test_*_unit.py' -v
 
 # Integration tests (macOS; shell + settings end-to-end)
 python3 -m unittest discover -s tests -p 'test_integration_*.py' -v
+
+# Full local quality gate, including coverage
+python3 -m pip install -r requirements-dev.txt
+bash scripts/run_checks.sh full
 ```
 
 | Area | Files |
@@ -386,6 +391,14 @@ CI runs the same commands on **`macos-latest`** via
 [`.github/workflows/tests.yml`](/Users/bruno/Automations/email-reader/.github/workflows/tests.yml).
 The badge at the top of this README reflects that workflow on the `main` branch
 (passes when unit and integration tests succeed on GitHub’s macOS runners).
+
+Python coverage currently includes `bin/*.py`, except the PyObjC/rumps entry
+point `bin/menubar_app.py`; its pure behavior lives in the covered
+`bin/menubar_logic.py`. The full quality gate enforces at least **80% combined
+line/branch coverage**, refreshes `coverage.svg`, and writes `coverage.xml`.
+GitHub Actions publishes the XML report as the `python-coverage` artifact.
+Dashboard JavaScript behavior is exercised separately by the Node component
+harness and is not included in the Python percentage.
 
 ### Git hooks
 
