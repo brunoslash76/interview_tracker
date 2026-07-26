@@ -54,6 +54,29 @@ a:hover{text-decoration:underline}
   color:var(--text-dim);padding:8px 12px;border-radius:999px;cursor:pointer;font-size:.85rem;font-weight:600;
   box-shadow:var(--shadow-sm);transition:.15s}
 .toggle:hover{border-color:var(--border-strong);color:var(--text)}
+.scan-btn{background:var(--accent);color:var(--accent-text);border-color:transparent}
+.scan-btn:hover{color:var(--accent-text);border-color:transparent;filter:brightness(1.05)}
+.scan-btn:disabled{opacity:.55;cursor:not-allowed;filter:none}
+
+.modal-backdrop{position:fixed;inset:0;background:rgba(12,14,20,.45);display:none;align-items:center;
+  justify-content:center;padding:20px;z-index:50}
+.modal-backdrop.open{display:flex}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);
+  max-width:480px;width:100%;padding:22px 22px 18px}
+.modal h2{font-size:1.15rem;font-weight:700;margin-bottom:6px}
+.modal .phase{color:var(--text-dim);font-size:.9rem;min-height:2.6em;margin:10px 0 14px;line-height:1.45}
+.modal .quip{color:var(--text);font-size:.95rem;font-style:italic;min-height:3em;margin-bottom:14px}
+.modal .meta{display:flex;justify-content:space-between;gap:12px;font-size:.8rem;color:var(--text-faint);margin-bottom:14px}
+.scan-bar{height:8px;border-radius:999px;background:var(--surface-3);overflow:hidden;margin-bottom:12px}
+.scan-bar>i{display:block;height:100%;width:35%;background:linear-gradient(90deg,var(--accent),var(--purple));
+  border-radius:999px;animation:scanPulse 1.4s ease-in-out infinite}
+@keyframes scanPulse{0%,100%{transform:translateX(-30%);opacity:.85}50%{transform:translateX(220%);opacity:1}}
+.modal-result{font-size:.88rem;color:var(--text-dim);margin-bottom:12px}
+.modal-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+.modal-actions button{padding:9px 14px;border-radius:var(--radius-sm);border:1px solid var(--border-strong);
+  background:var(--surface-2);font-weight:600;cursor:pointer;font-size:.88rem}
+.modal-actions button.primary{background:var(--accent);color:var(--accent-text);border-color:transparent}
+@media(prefers-reduced-motion:reduce){.scan-bar>i{animation:none;width:100%}}
 
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
 .tile{position:relative;text-align:left;background:var(--surface);border:1px solid var(--border);
@@ -201,6 +224,7 @@ button.nav:disabled{opacity:.4;cursor:not-allowed}
       <div class="sub">Scanned from Gmail twice daily · sorted by most recent contact</div>
     </div>
     <div class="top-actions">
+      <button class="toggle scan-btn" id="scanNow" type="button">Scan Gmail now</button>
       <a class="toggle" href="/settings" style="text-decoration:none">Settings</a>
       <button class="toggle" id="theme" aria-label="Toggle dark mode"><span id="themeIcon">🌙</span><span id="themeLabel">Dark</span></button>
       <div class="gen" id="gen">Data updated __GENERATED_AT__</div>
@@ -258,10 +282,202 @@ button.nav:disabled{opacity:.4;cursor:not-allowed}
   <div class="foot" id="foot"></div>
 </div>
 
+<div class="modal-backdrop" id="scanModal" aria-hidden="true">
+  <div class="modal" role="dialog" aria-labelledby="scanModalTitle" aria-modal="true">
+    <h2 id="scanModalTitle">Reading your Gmail</h2>
+    <div class="meta"><span id="scanPhaseLabel">Starting…</span><span id="scanElapsed">0s</span></div>
+    <div class="scan-bar" aria-hidden="true"><i></i></div>
+    <div class="quip" id="scanQuip">Going through a lot of spam here… what's up with that?</div>
+    <div class="phase" id="scanDetail">Hang tight — Claude is on inbox duty.</div>
+    <div class="modal-result" id="scanResult" hidden></div>
+    <div class="modal-actions">
+      <button type="button" id="scanClose">Close</button>
+      <button type="button" class="primary" id="scanDone" hidden>Nice</button>
+    </div>
+  </div>
+</div>
+
 <script type="application/json" id="interview-data">__DATA_JSON__</script>
 <script>
 const ALL = JSON.parse(document.getElementById('interview-data').textContent);
 const STAGES=["Initial Contact","Phone Screen","Technical Round","Final Interview","Offer"];
+
+const SCAN_QUIPS = [
+  "Going through a lot of spam here… what's up with that?",
+  "Separating real recruiters from 'exciting opportunities' in your spam folder.",
+  "Claude is speed-reading your inbox like it's a Netflix recap.",
+  "If this were a movie, we'd be in the 'montage' scene.",
+  "Still not clicking that 'You've won a cruise' email. Professional.",
+  "Every 'quick chat' email is a potential plot twist.",
+  "Filtering out newsletters you definitely subscribed to at 2am.",
+  "Looking for Calendly links like it's a treasure hunt.",
+  "Recruiter or robot? The eternal inbox mystery.",
+  "Your inbox is… ambitious. Respect.",
+];
+const PHASE_LABELS = {
+  starting: "Booting up the scanner",
+  config: "Loading scan settings",
+  extracting: "Reading Gmail threads",
+  merging: "Updating your dashboard",
+  complete: "All done",
+  failed: "Something went wrong",
+  busy: "Scanner is busy",
+};
+let scanPollTimer = null;
+let scanElapsedTimer = null;
+let quipTimer = null;
+let scanStartedAt = null;
+
+function csrfToken(){
+  const m = document.cookie.match(/(?:^|;\s*)it_csrf=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : '';
+}
+function openScanModal(){
+  const m = $('scanModal');
+  m.classList.add('open');
+  m.setAttribute('aria-hidden','false');
+  $('scanDone').hidden = true;
+  $('scanResult').hidden = true;
+  $('scanClose').textContent = 'Close';
+}
+function closeScanModal(){
+  const m = $('scanModal');
+  m.classList.remove('open');
+  m.setAttribute('aria-hidden','true');
+  stopQuipRotation();
+}
+function stopQuipRotation(){
+  if(quipTimer){ clearInterval(quipTimer); quipTimer = null; }
+}
+function startQuipRotation(){
+  stopQuipRotation();
+  let i = Math.floor(Math.random()*SCAN_QUIPS.length);
+  $('scanQuip').textContent = SCAN_QUIPS[i];
+  quipTimer = setInterval(()=>{
+    i = (i+1) % SCAN_QUIPS.length;
+    $('scanQuip').textContent = SCAN_QUIPS[i];
+  }, 4500);
+}
+function updateScanElapsed(){
+  if(!scanStartedAt) return;
+  const sec = Math.max(0, Math.floor((Date.now()-scanStartedAt)/1000));
+  $('scanElapsed').textContent = sec + 's';
+}
+function applyRecords(records){
+  ALL.length = 0;
+  records.forEach(r=>ALL.push(r));
+  ALL.forEach(r=>{ r._act=actionInfo(r); r._age=ageOf(emailSrc(r)); });
+  quick=''; page=1;
+  initStatusFilter(true);
+  renderStats();
+  renderActions();
+  renderPipe();
+  sortView();
+  syncSortHeaders();
+  draw();
+  $('foot').textContent='Interview Tracker · '+ALL.length+' opportunities tracked';
+}
+function initStatusFilter(rebuild){
+  if(!rebuild){
+    const seen=[...new Set(ALL.map(r=>statusShort(r.status)).filter(x=>x&&x!=='—'))].sort();
+    $('fStatus').insertAdjacentHTML('beforeend', seen.map(s=>`<option>${esc(s)}</option>`).join(''));
+    return;
+  }
+  const cur = $('fStatus').value;
+  while($('fStatus').options.length>1) $('fStatus').remove(1);
+  const seen=[...new Set(ALL.map(r=>statusShort(r.status)).filter(x=>x&&x!=='—'))].sort();
+  $('fStatus').insertAdjacentHTML('beforeend', seen.map(s=>`<option>${esc(s)}</option>`).join(''));
+  if([...$('fStatus').options].some(o=>o.value===cur)) $('fStatus').value = cur;
+}
+async function pollScanStatus(){
+  try{
+    const res = await fetch('/api/scan/status');
+    const st = await res.json();
+    const phase = st.phase || st.state || 'starting';
+    $('scanPhaseLabel').textContent = PHASE_LABELS[phase] || phase;
+    if(phase === 'extracting') startQuipRotation();
+    else if(phase === 'merging') {
+      stopQuipRotation();
+      $('scanQuip').textContent = "Turning email chaos into neat little rows…";
+    }
+    if(st.state === 'running'){
+      $('scanDetail').textContent = 'Scan still running — you can close this and keep browsing.';
+      updateScanElapsed();
+      return;
+    }
+    clearInterval(scanPollTimer);
+    scanPollTimer = null;
+    if(scanElapsedTimer){ clearInterval(scanElapsedTimer); scanElapsedTimer = null; }
+    $('scanNow').disabled = false;
+    stopQuipRotation();
+    if(st.state === 'succeeded'){
+      $('scanPhaseLabel').textContent = PHASE_LABELS.complete;
+      $('scanQuip').textContent = "Inbox survived. Dashboard upgraded.";
+      const dataRes = await fetch('/api/dashboard-data');
+      const payload = await dataRes.json();
+      applyRecords(payload.records || []);
+      if(payload.generated_at) $('gen').textContent = 'Data updated ' + payload.generated_at;
+      const nc = st.new_count || 0, uc = st.updated_count || 0;
+      $('scanResult').hidden = false;
+      $('scanResult').textContent = `Found ${st.extracted_count ?? '—'} threads · ${nc} new · ${uc} updated.`;
+      $('scanDone').hidden = false;
+      $('scanClose').textContent = 'Close';
+    } else {
+      $('scanPhaseLabel').textContent = PHASE_LABELS.failed;
+      $('scanQuip').textContent = st.error || "The scanner tripped over something.";
+      $('scanResult').hidden = false;
+      $('scanResult').textContent = st.error || 'Scan failed.';
+    }
+  }catch(e){
+    $('scanDetail').textContent = 'Lost contact with the local server. Is the menu bar app running?';
+  }
+}
+async function startScan(){
+  if($('scanNow').disabled) return;
+  $('scanNow').disabled = true;
+  openScanModal();
+  scanStartedAt = Date.now();
+  $('scanPhaseLabel').textContent = PHASE_LABELS.starting;
+  $('scanDetail').textContent = 'Starting scan…';
+  $('scanQuip').textContent = SCAN_QUIPS[0];
+  startQuipRotation();
+  updateScanElapsed();
+  if(scanElapsedTimer) clearInterval(scanElapsedTimer);
+  scanElapsedTimer = setInterval(updateScanElapsed, 1000);
+  if(scanPollTimer) clearInterval(scanPollTimer);
+  try{
+    const res = await fetch('/api/scan', {
+      method:'POST',
+      headers:{'X-CSRF-Token': csrfToken(), 'Content-Type':'application/json'},
+      body:'{}',
+    });
+    if(res.status === 409){
+      $('scanNow').disabled = false;
+      $('scanQuip').textContent = "Another scan is already running. Patience, young grasshopper.";
+      $('scanPhaseLabel').textContent = PHASE_LABELS.busy;
+      return;
+    }
+    if(!res.ok){
+      $('scanNow').disabled = false;
+      const err = await res.json().catch(()=>({}));
+      $('scanQuip').textContent = err.error || 'Could not start scan.';
+      return;
+    }
+    const poll = setInterval(pollScanStatus, 1500);
+    scanPollTimer = poll;
+    pollScanStatus();
+  }catch(e){
+    $('scanNow').disabled = false;
+    $('scanQuip').textContent = 'Could not reach the server. Open the app from the menu bar first.';
+  }
+}
+$('scanNow').onclick = startScan;
+$('scanClose').onclick = closeScanModal;
+$('scanDone').onclick = ()=>{ closeScanModal(); };
+$('scanModal').addEventListener('click', e=>{ if(e.target === $('scanModal')) closeScanModal(); });
+document.addEventListener('keydown', e=>{
+  if(e.key === 'Escape' && $('scanModal').classList.contains('open')) closeScanModal();
+});
 
 /* ---------- helpers ---------- */
 function pd(raw){ if(!raw) return null; const d=new Date(raw); return isNaN(d.getTime())?null:d; }
@@ -499,10 +715,6 @@ function draw(){
 }
 
 /* ---------- wire up ---------- */
-function initStatusFilter(){
-  const seen=[...new Set(ALL.map(r=>statusShort(r.status)).filter(x=>x&&x!=='—'))].sort();
-  $('fStatus').insertAdjacentHTML('beforeend', seen.map(s=>`<option>${esc(s)}</option>`).join(''));
-}
 $('prev').onclick=()=>{ if(page>1){page--; draw(); window.scrollTo({top:0,behavior:'smooth'});} };
 $('next').onclick=()=>{ page++; draw(); window.scrollTo({top:0,behavior:'smooth'}); };
 ['fCo','fDate'].forEach(id=>$(id).addEventListener('input',apply));
@@ -533,4 +745,18 @@ renderPipe();
 sortView();
 syncSortHeaders();
 draw();
+
+fetch('/api/scan/status').then(r=>r.json()).then(st=>{
+  if(st.state !== 'running') return;
+  $('scanNow').disabled = true;
+  scanStartedAt = st.started_at ? Date.parse(st.started_at) : Date.now();
+  openScanModal();
+  $('scanPhaseLabel').textContent = PHASE_LABELS[st.phase] || PHASE_LABELS.starting;
+  if(scanElapsedTimer) clearInterval(scanElapsedTimer);
+  scanElapsedTimer = setInterval(updateScanElapsed, 1000);
+  if(!scanPollTimer){
+    scanPollTimer = setInterval(pollScanStatus, 1500);
+    pollScanStatus();
+  }
+}).catch(()=>{});
 </script></body></html>
