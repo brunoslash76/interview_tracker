@@ -66,27 +66,27 @@ if ! command -v "${CLAUDE_BIN}" >/dev/null 2>&1 && [ ! -x "${CLAUDE_BIN}" ]; the
   exit 1
 fi
 
-# Bound each run to mail since the last successful scan (5-day overlap to catch
-# late replies near the boundary). First run looks back 120 days.
-if ! LAST_SCAN=$(/usr/bin/python3 "${ROOT}/bin/database.py" --db "${DB_FILE}" last-scan-date 2>>"${LOG_FILE}"); then
-  log "ERROR: could not read last successful scan date"
+# Scans under 30 minutes apart use the newest email timestamp actually read by
+# the previous scan. Older scans retain the five-day overlap safety window.
+if ! SCAN_WINDOW=$(/usr/bin/python3 "${ROOT}/bin/database.py" --db "${DB_FILE}" scan-window-json 2>>"${LOG_FILE}"); then
+  log "ERROR: could not compute Gmail scan window"
   exit 1
 fi
-if [[ -n "${LAST_SCAN}" ]]; then
-  AFTER_DATE=$(date -j -v-5d -f "%Y-%m-%d" "${LAST_SCAN}" "+%Y/%m/%d" 2>/dev/null || date -v-5d "+%Y/%m/%d")
-else
-  AFTER_DATE=$(date -v-120d "+%Y/%m/%d")
-fi
-log "searching Gmail for interview-related threads after:${AFTER_DATE}"
+IFS=$'\t' read -r SEARCH_QUERY WINDOW_MODE EMAIL_WATERMARK < <(/usr/bin/python3 -c "
+import json, sys
+window = json.load(sys.stdin)
+print(window['query'], window['mode'], window.get('latest_email_watermark') or '', sep='\t')
+" <<< "${SCAN_WINDOW}")
+log "searching Gmail with ${SEARCH_QUERY} (mode: ${WINDOW_MODE})"
 
 if ! SCAN_CONFIG=$(/usr/bin/python3 "${ROOT}/bin/database.py" --db "${DB_FILE}" scan-config-json 2>>"${LOG_FILE}"); then
   log "ERROR: could not read scan configuration"
   exit 1
 fi
-read -r EMAIL_FILTER GMAIL_INVOLVEMENT < <(/usr/bin/python3 -c "
+IFS=$'\t' read -r EMAIL_FILTER GMAIL_INVOLVEMENT < <(/usr/bin/python3 -c "
 import json, sys
 config = json.load(sys.stdin)
-print(config.get('email_filter', ''), config.get('gmail_involvement_filter', ''))
+print(config.get('email_filter', ''), config.get('gmail_involvement_filter', ''), sep='\t')
 " <<< "${SCAN_CONFIG}")
 if [[ -n "${EMAIL_FILTER}" ]]; then
   log "using email involvement filter for ${EMAIL_FILTER}"
@@ -115,14 +115,23 @@ JSON_SCHEMA='{
         },
         "required": ["thread_id", "company", "stage", "status"]
       }
+    },
+    "latest_email_date_seen": {
+      "type": ["string", "null"],
+      "description": "ISO 8601 timestamp of the newest Gmail message actually inspected during this scan, across all fetched threads"
     }
   },
-  "required": ["interviews"]
+  "required": ["interviews", "latest_email_date_seen"]
 }'
 
 PROMPT="You are scanning my Gmail for job-interview-related email threads: interview invitations, scheduling/confirmation emails, recruiter or HR replies about an application, technical/onsite interview logistics, and offer communications. Ignore generic job-board alerts, newsletters, and marketing.
 
-Search using mcp__claude_ai_Gmail__search_threads with queries covering interview-related terms (e.g. interview, phone screen, technical interview, onsite, recruiter, hiring, offer, schedule a call, next steps) restricted to after:${AFTER_DATE}. Run several searches with different terms since one query will not catch everything. For each candidate thread, call mcp__claude_ai_Gmail__get_thread to read the full content before extracting data — do not guess from snippets alone."
+Search using mcp__claude_ai_Gmail__search_threads with queries covering interview-related terms (e.g. interview, phone screen, technical interview, onsite, recruiter, hiring, offer, schedule a call, next steps). EVERY search query MUST include this exact boundary unchanged: ${SEARCH_QUERY}. Never issue a search without it and never replace it with an older or broader boundary. Run several searches with different terms since one query will not catch everything. Only call mcp__claude_ai_Gmail__get_thread for thread IDs returned by those bounded searches. For each candidate thread, read the full content before extracting data — do not guess from snippets alone."
+if [[ "${WINDOW_MODE}" == "recent-watermark" ]]; then
+  PROMPT="${PROMPT}
+
+RECENT-SCAN GUARDRAIL: the previous successful scan was less than 30 minutes ago. The newest message it read was ${EMAIL_WATERMARK}. Process only messages newer than that watermark. Older messages included in a matching thread are context only; do not re-extract or reconsider them unless a newer message changes that application's current state."
+fi
 if [[ -n "${GMAIL_INVOLVEMENT}" ]]; then
   PROMPT="${PROMPT}
 
@@ -143,6 +152,8 @@ For every distinct company/application you find, extract one record with:
 - last_email_date: ISO 8601 date of the most recent email in the thread
 - notes: any other useful short context, else null
 
+Also return latest_email_date_seen as the ISO 8601 timestamp of the newest individual Gmail message you actually inspected across every fetched thread. Return null only when no thread was fetched. This watermark must reflect message data, not the current clock time.
+
 Output ONLY the structured JSON matching the provided schema — no prose, no markdown fences."
 
 emit_progress "extracting"
@@ -162,14 +173,17 @@ if isinstance(result, str):
 interviews = result.get('interviews', [])
 if not isinstance(interviews, list):
     raise TypeError('interviews must be an array')
-json.dump(interviews, sys.stdout)
+watermark = result.get('latest_email_date_seen')
+if watermark is not None and not isinstance(watermark, str):
+    raise TypeError('latest_email_date_seen must be a string or null')
+json.dump({'interviews': interviews, 'latest_email_date_seen': watermark}, sys.stdout)
 " > "${RAW_FILE}" 2>>"${LOG_FILE}"; then
   log "ERROR: claude invocation or JSON parsing failed"
   emit_progress "failed" "claude extraction failed"
   exit 1
 fi
 
-COUNT=$(/usr/bin/python3 -c "import json, sys; print(len(json.load(open(sys.argv[1]))))" "${RAW_FILE}")
+COUNT=$(/usr/bin/python3 -c "import json, sys; print(len(json.load(open(sys.argv[1]))['interviews']))" "${RAW_FILE}")
 log "extracted ${COUNT} candidate records"
 
 emit_progress "merging" "${COUNT}"
