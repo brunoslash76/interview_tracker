@@ -45,10 +45,20 @@ def main():
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     if len(sys.argv) == 2:
-        incoming = json.loads(Path(sys.argv[1]).read_text())
+        extraction = json.loads(Path(sys.argv[1]).read_text())
+        if isinstance(extraction, dict):
+            incoming = extraction.get("interviews")
+            latest_email_date_seen = extraction.get("latest_email_date_seen")
+        else:
+            incoming = extraction
+            latest_email_date_seen = None
         if not isinstance(incoming, list):
-            raise ValueError("raw extraction must be a JSON array")
-        summary = database.merge_scan(incoming, db_path=DB_FILE)
+            raise ValueError("raw extraction must contain an interviews array")
+        summary = database.merge_scan(
+            incoming,
+            db_path=DB_FILE,
+            latest_email_date_seen=latest_email_date_seen,
+        )
         new_company_names = summary["new_company_names"]
         updated_count = summary["updated_count"]
     else:

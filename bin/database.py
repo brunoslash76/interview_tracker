@@ -14,7 +14,7 @@ import json
 import os
 import re
 import sqlite3
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Union
@@ -24,7 +24,9 @@ SCHEMA_VERSION = 2
 DEFAULT_DATA_DIR = Path.home() / "Library" / "Application Support" / "InterviewTracker"
 DEFAULT_DB_NAME = "interview_tracker.sqlite3"
 LAST_SUCCESSFUL_SCAN_DATE_KEY = "last_successful_scan_date"
+LATEST_EMAIL_WATERMARK_KEY = "latest_email_watermark"
 HTTP_LISTEN_PORT_KEY = "http_listen_port"
+RECENT_SCAN_WINDOW_MINUTES = 30
 MAX_SCAN_TIMES = 5
 DEFAULT_SCAN_TIMES = ((9, 0), (20, 0))
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -461,6 +463,7 @@ def merge_scan(
     timestamp: Optional[str] = None,
     scan_date: Optional[str] = None,
     update_scan_date: bool = True,
+    latest_email_date_seen: Optional[str] = None,
 ) -> dict[str, Any]:
     """Atomically merge one successful scan and append its summary row."""
     run_timestamp = timestamp or now_iso()
@@ -512,6 +515,23 @@ def merge_scan(
                 """,
                 (LAST_SUCCESSFUL_SCAN_DATE_KEY, successful_date),
             )
+        normalized_watermark = normalize_email_watermark(latest_email_date_seen)
+        if normalized_watermark is not None:
+            existing_row = connection.execute(
+                "SELECT value FROM metadata WHERE key = ?",
+                (LATEST_EMAIL_WATERMARK_KEY,),
+            ).fetchone()
+            existing = (
+                normalize_email_watermark(existing_row["value"]) if existing_row else None
+            )
+            if existing is None or parse_datetime(normalized_watermark) > parse_datetime(existing):
+                connection.execute(
+                    """
+                    INSERT INTO metadata (key, value) VALUES (?, ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """,
+                    (LATEST_EMAIL_WATERMARK_KEY, normalized_watermark),
+                )
         connection.commit()
         return summary
     except Exception:
@@ -578,6 +598,59 @@ def set_last_successful_scan_date(
     normalized = parsed.date().isoformat()
     set_metadata(LAST_SUCCESSFUL_SCAN_DATE_KEY, normalized, db_path)
     return normalized
+
+
+def normalize_email_watermark(value: Any) -> Optional[str]:
+    parsed = parse_datetime(value)
+    if parsed is None:
+        return None
+    return parsed.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def get_latest_email_watermark(db_path: Optional[PathLike] = None) -> Optional[str]:
+    return get_metadata(LATEST_EMAIL_WATERMARK_KEY, db_path)
+
+
+def get_scan_window(
+    db_path: Optional[PathLike] = None,
+    now: Optional[datetime] = None,
+) -> dict[str, Any]:
+    """Return the strict recent watermark or the normal overlap search boundary."""
+    current = now or datetime.now().astimezone()
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=datetime.now().astimezone().tzinfo)
+
+    summary = get_latest_summary(db_path)
+    last_scan_at = parse_datetime(summary.get("timestamp")) if summary else None
+    watermark = get_latest_email_watermark(db_path)
+    parsed_watermark = parse_datetime(watermark)
+    recent = False
+    if last_scan_at is not None and parsed_watermark is not None:
+        age = current.astimezone(timezone.utc) - last_scan_at.astimezone(timezone.utc)
+        recent = timedelta(0) <= age < timedelta(minutes=RECENT_SCAN_WINDOW_MINUTES)
+
+    if recent:
+        query = f"after:{int(parsed_watermark.timestamp())}"
+        mode = "recent-watermark"
+    else:
+        last_scan_date = get_last_successful_scan_date(db_path)
+        parsed_date = parse_datetime(last_scan_date)
+        boundary = (
+            parsed_date.astimezone() - timedelta(days=5)
+            if parsed_date is not None
+            else current.astimezone() - timedelta(days=120)
+        )
+        query = f"after:{boundary.strftime('%Y/%m/%d')}"
+        mode = "overlap"
+
+    return {
+        "query": query,
+        "mode": mode,
+        "recent": recent,
+        "last_scan_at": summary.get("timestamp") if summary else None,
+        "latest_email_watermark": watermark,
+        "recent_window_minutes": RECENT_SCAN_WINDOW_MINUTES,
+    }
 
 
 def parse_time_value(value: Any) -> tuple[int, int]:
@@ -766,6 +839,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     set_date_parser.add_argument("date")
     subparsers.add_parser("settings-json", help="print user settings")
     subparsers.add_parser("scan-config-json", help="print Gmail scan configuration")
+    subparsers.add_parser("scan-window-json", help="print the next Gmail search boundary")
     args = parser.parse_args(argv)
 
     if args.command == "init":
@@ -784,6 +858,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         _json_print(get_user_settings(args.db))
     elif args.command == "scan-config-json":
         _json_print(get_scan_config(args.db))
+    elif args.command == "scan-window-json":
+        _json_print(get_scan_window(args.db))
     return 0
 
 
