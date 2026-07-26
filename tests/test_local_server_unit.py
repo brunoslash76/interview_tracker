@@ -15,6 +15,22 @@ class LocalServerHttpTests(unittest.TestCase):
     def setUp(self):
         self.local_server_module = load_bin_module("local_server")
 
+    def test_dashboard_render_embeds_escaped_csrf_token(self):
+        merge = mock.Mock()
+        merge.render_dashboard.return_value = (
+            '<input id="csrfToken" value="__CSRF_TOKEN__">'
+        )
+        with mock.patch.object(
+            self.local_server_module, "_merge_module", return_value=merge
+        ), mock.patch.object(
+            self.local_server_module.database, "get_records", return_value=[]
+        ):
+            rendered = self.local_server_module.render_dashboard_html('token&"value')
+
+        self.assertNotIn("__CSRF_TOKEN__", rendered)
+        self.assertIn("token&amp;&quot;value", rendered)
+        merge.render_dashboard.assert_called_once_with([])
+
     def _start(self, temp_dir: Path) -> tuple[int, http.client.HTTPConnection]:
         data_dir = temp_dir
         db_path = data_dir / "interview_tracker.sqlite3"

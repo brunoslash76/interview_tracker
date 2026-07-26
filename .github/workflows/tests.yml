@@ -17,6 +17,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set up Node for dashboard component tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Validate shell scripts
         run: |
           bash -n install.sh
