@@ -17,8 +17,11 @@ configuration, generated pages, logs, and backups live outside the clone.
    **Settings** (default 09:00 and 20:00 local system time), or the script can
    be started manually.
 2. The script runs the Claude CLI headlessly with only the Gmail thread-search
-   and thread-read MCP tools allowed. It scans with a five-day overlap from the
-   last successful scan; the first scan looks back 120 days.
+   and thread-read MCP tools allowed. Scans started less than 30 minutes after
+   the previous success use an exact Gmail epoch boundary from the newest
+   message that Claude actually read. Older runs use a five-day overlap; the
+   first scan looks back 120 days. Every Claude search is explicitly required
+   to preserve the computed boundary.
 3. Claude returns schema-constrained JSON to a temporary private file.
    `bin/merge_interviews.py` merges it transactionally into SQLite and regenerates
    the private dashboard.
