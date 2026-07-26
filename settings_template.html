@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Interview Tracker Settings</title>
+<style>
+:root{
+  --bg:#eef1f7; --surface:#ffffff; --text:#141824; --text-dim:#5b6472;
+  --border:#e4e8f0; --accent:#5b5bf0; --accent-text:#ffffff;
+  --good:#0f9d58; --bad:#d1394a; --radius:14px;
+}
+[data-theme="dark"]{
+  --bg:#0c0e14; --surface:#161a24; --text:#e8ebf2; --text-dim:#a2acbd; --border:#262c3a; --accent:#7b7bff;
+}
+*{box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);margin:0;padding:24px}
+.wrap{max-width:720px;margin:0 auto}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px;margin-bottom:16px}
+h1{font-size:1.6rem;margin:0 0 8px}
+p{color:var(--text-dim);line-height:1.5}
+label{display:block;font-weight:600;margin:16px 0 8px}
+input[type=email],input[type=time]{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;font-size:1rem;background:transparent;color:var(--text)}
+.row{display:flex;gap:10px;align-items:center;margin-bottom:10px}
+.row input[type=time]{flex:1}
+button{border:none;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer}
+.btn-primary{background:var(--accent);color:var(--accent-text)}
+.btn-secondary{background:transparent;border:1px solid var(--border);color:var(--text)}
+.btn-danger{background:transparent;border:1px solid var(--bad);color:var(--bad)}
+.toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-top:20px}
+.status{min-height:1.2rem;margin-top:12px;font-size:.92rem}
+.status.ok{color:var(--good)} .status.err{color:var(--bad)}
+.nav{margin-bottom:16px}
+.nav a{color:var(--accent);text-decoration:none;font-weight:600}
+.note{font-size:.9rem;color:var(--text-dim);margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="nav"><a href="/dashboard">← Back to dashboard</a></div>
+  <div class="card">
+    <h1>Scan settings</h1>
+    <p>Configure daily Gmail scan times and an optional email filter. Times use your Mac's local clock.</p>
+    <form id="settings-form">
+      <label for="email">Email filter</label>
+      <input id="email" name="email" type="email" autocomplete="email" placeholder="you@example.com">
+      <p class="note">Restricts Gmail searches to messages involving this address. It does not change which Google account Claude uses — authenticate the correct account in the Claude CLI.</p>
+      <label>Daily scan times (max __MAX_SCAN_TIMES__)</label>
+      <div id="times"></div>
+      <div class="toolbar">
+        <button type="button" class="btn-secondary" id="add-time">Add time</button>
+        <button type="submit" class="btn-primary">Save and apply schedule</button>
+      </div>
+      <div id="status" class="status"></div>
+    </form>
+  </div>
+</div>
+<script>
+const CSRF = "__CSRF_TOKEN__";
+const MAX_TIMES = __MAX_SCAN_TIMES__;
+const timesEl = document.getElementById("times");
+const statusEl = document.getElementById("status");
+const addBtn = document.getElementById("add-time");
+
+function csrfHeaders() {
+  return {"Content-Type":"application/json","X-CSRF-Token": CSRF};
+}
+
+function makeRow(value="09:00") {
+  const row = document.createElement("div");
+  row.className = "row";
+  row.innerHTML = `
+    <input type="time" value="${value}">
+    <button type="button" class="btn-danger remove">Remove</button>
+  `;
+  row.querySelector(".remove").addEventListener("click", () => {
+    row.remove();
+    syncAddButton();
+  });
+  timesEl.appendChild(row);
+  syncAddButton();
+}
+
+function syncAddButton() {
+  addBtn.disabled = timesEl.querySelectorAll(".row").length >= MAX_TIMES;
+}
+
+addBtn.addEventListener("click", () => {
+  if (timesEl.querySelectorAll(".row").length < MAX_TIMES) makeRow();
+});
+
+function setStatus(text, ok) {
+  statusEl.textContent = text;
+  statusEl.className = "status " + (ok ? "ok" : "err");
+}
+
+async function loadSettings() {
+  const res = await fetch("/api/settings");
+  const data = await res.json();
+  timesEl.innerHTML = "";
+  const times = data.scan_times && data.scan_times.length ? data.scan_times : ["09:00","20:00"];
+  times.forEach(t => makeRow(t));
+  document.getElementById("email").value = data.email || "";
+}
+
+document.getElementById("settings-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  setStatus("Saving…", true);
+  const scan_times = [...timesEl.querySelectorAll('input[type="time"]')].map(i => i.value).filter(Boolean);
+  const payload = {
+    email: document.getElementById("email").value.trim(),
+    scan_times
+  };
+  try {
+    const res = await fetch("/api/settings", {method:"PUT", headers: csrfHeaders(), body: JSON.stringify(payload)});
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Save failed");
+    setStatus("Saved. Scheduler updated.", true);
+    await loadSettings();
+  } catch (err) {
+    setStatus(err.message || String(err), false);
+  }
+});
+
+loadSettings().catch(err => setStatus(err.message || String(err), false));
+</script>
+</body>
+</html>
