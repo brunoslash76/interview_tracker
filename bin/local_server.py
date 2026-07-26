@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 
 import database
 import scheduler
+import scan_runner
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(
@@ -45,6 +46,14 @@ class LocalServerState:
 
 
 STATE = LocalServerState()
+_SCAN_RUNNER: Optional[scan_runner.ScanRunner] = None
+
+
+def get_scan_runner() -> scan_runner.ScanRunner:
+    global _SCAN_RUNNER
+    if _SCAN_RUNNER is None or _SCAN_RUNNER.data_dir != DATA_DIR or _SCAN_RUNNER.db_path != DB_FILE:
+        _SCAN_RUNNER = scan_runner.ScanRunner(ROOT, DATA_DIR, DB_FILE)
+    return _SCAN_RUNNER
 
 
 def _merge_module():
@@ -179,16 +188,42 @@ class InterviewTrackerHandler(BaseHTTPRequestHandler):
         if path == "/api/settings":
             self._send_json(HTTPStatus.OK, database.get_user_settings(DB_FILE))
             return
+        if path == "/api/scan/status":
+            self._send_json(HTTPStatus.OK, get_scan_runner().snapshot())
+            return
+        if path == "/api/dashboard-data":
+            self._send_json(HTTPStatus.OK, scan_runner.dashboard_payload(DB_FILE))
+            return
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
     def do_PUT(self) -> None:
         self._handle_settings_update()
 
     def do_POST(self) -> None:
-        if urlparse(self.path).path == "/api/settings":
+        path = urlparse(self.path).path
+        if path == "/api/settings":
             self._handle_settings_update()
             return
+        if path == "/api/scan":
+            self._handle_scan_start()
+            return
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+
+    def _handle_scan_start(self) -> None:
+        if not self._validate_host() or not self._validate_origin():
+            self._send_json(HTTPStatus.FORBIDDEN, {"error": "invalid origin"})
+            return
+        if not self._csrf_valid():
+            self._send_json(HTTPStatus.FORBIDDEN, {"error": "invalid csrf token"})
+            return
+        started, payload = get_scan_runner().start()
+        if not started:
+            self._send_json(
+                HTTPStatus.CONFLICT,
+                {"error": payload.get("error", "scan busy"), "status": payload.get("status")},
+            )
+            return
+        self._send_json(HTTPStatus.ACCEPTED, {"status": payload})
 
     def _handle_settings_update(self) -> None:
         if not self._validate_host() or not self._validate_origin():
