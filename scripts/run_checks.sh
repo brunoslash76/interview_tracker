@@ -58,6 +58,8 @@ if [ "${MODE}" = "full" ]; then
     exit 1
   fi
   echo "Building and testing Storybook…"
+  echo "Installing Playwright (chromium) for Storybook tests…"
+  (cd frontend && npx playwright install --with-deps chromium)
   (cd frontend && npm run build-storybook)
   python3 -m http.server 6007 --directory frontend/storybook-static >/dev/null 2>&1 &
   STORYBOOK_PID=$!

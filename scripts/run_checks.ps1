@@ -32,6 +32,8 @@ if ($Mode -eq "full") {
     if (git diff --quiet HEAD -- frontend-coverage.svg) { } else {
         throw "frontend-coverage.svg changed. Commit the refreshed README badge."
     }
+    Write-Host "Installing Playwright (chromium) for Storybook tests…"
+    npx playwright install --with-deps chromium
     npm run build-storybook
     $storyJob = Start-Job { param($dir) Set-Location $dir; python -m http.server 6007 --directory storybook-static } -ArgumentList (Get-Location)
     Start-Sleep -Seconds 2

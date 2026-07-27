@@ -35,6 +35,8 @@ if [ "${MODE}" = "full" ]; then
     echo "ERROR: frontend-coverage.svg changed. Commit the refreshed README badge." >&2
     exit 1
   fi
+  echo "Installing Playwright (chromium) for Storybook tests…"
+  (cd frontend && npx playwright install --with-deps chromium)
   (cd frontend && npm run build-storybook)
   python3 -m http.server 6007 --directory frontend/storybook-static >/dev/null 2>&1 &
   STORYBOOK_PID=$!
