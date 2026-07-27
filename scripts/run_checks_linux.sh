@@ -38,11 +38,7 @@ if [ "${MODE}" = "full" ]; then
   echo "Installing Playwright (chromium) for Storybook tests…"
   (cd frontend && npx playwright install --with-deps chromium)
   (cd frontend && npm run build-storybook)
-  python3 -m http.server 6007 --directory frontend/storybook-static >/dev/null 2>&1 &
-  STORYBOOK_PID=$!
-  sleep 2
-  (cd frontend && npm run test:storybook -- --url http://127.0.0.1:6007) || { kill "${STORYBOOK_PID}" 2>/dev/null || true; exit 1; }
-  kill "${STORYBOOK_PID}" 2>/dev/null || true
+  (cd frontend && npm run test:storybook:static)
 else
   (cd frontend && npm test && npm run build)
 fi

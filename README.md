@@ -641,7 +641,8 @@ cd frontend && npm run test:coverage          # full gate: 80% / 75% thresholds
 # Storybook (local docs + interaction/a11y via test-runner)
 cd frontend && npm run storybook
 cd frontend && npm run build-storybook
-cd frontend && npm run test:storybook -- --url http://127.0.0.1:6007
+cd frontend && npx playwright install --with-deps chromium
+cd frontend && npm run test:storybook:static
 
 # Playwright full-stack E2E (temp data dir + fake Claude; real FastAPI + built UI)
 cd frontend && npx playwright install --with-deps chromium

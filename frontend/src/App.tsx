@@ -1,11 +1,16 @@
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { useLiveApp } from "./useLiveApp";
-import { Dashboard } from "./components/Dashboard";
 import { LoadingScreen } from "./components/LoadingScreen";
 import { ScanActivity } from "./components/ScanActivity";
-import { SettingsPage } from "./components/SettingsPage";
 import { Toasts } from "./components/Toasts";
 import "./styles.css";
+
+const Dashboard = lazy(() =>
+  import("./components/Dashboard").then((module) => ({ default: module.Dashboard })),
+);
+const SettingsPage = lazy(() =>
+  import("./components/SettingsPage").then((module) => ({ default: module.SettingsPage })),
+);
 
 export default function App() {
   const live = useLiveApp();
@@ -34,18 +39,20 @@ export default function App() {
   if (!live.snapshot) return <LoadingScreen />;
 
   const path = location.pathname;
+  const route = path.startsWith("/settings") ? (
+    <SettingsPage settings={live.snapshot.settings} save={live.saveSettings} connected={live.connected} />
+  ) : (
+    <Dashboard
+      records={live.snapshot.dashboard.records}
+      generatedAt={live.snapshot.dashboard.generated_at}
+      connected={live.connected}
+      onScan={startScan}
+    />
+  );
+
   return (
     <>
-      {path.startsWith("/settings") ? (
-        <SettingsPage settings={live.snapshot.settings} save={live.saveSettings} connected={live.connected} />
-      ) : (
-        <Dashboard
-          records={live.snapshot.dashboard.records}
-          generatedAt={live.snapshot.dashboard.generated_at}
-          connected={live.connected}
-          onScan={startScan}
-        />
-      )}
+      <Suspense fallback={<LoadingScreen />}>{route}</Suspense>
       <ScanActivity
         scan={live.scan}
         open={scanOpen && (running || live.scan.state === "failed")}

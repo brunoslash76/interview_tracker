@@ -35,11 +35,7 @@ if ($Mode -eq "full") {
     Write-Host "Installing Playwright (chromium) for Storybook tests…"
     npx playwright install --with-deps chromium
     npm run build-storybook
-    $storyJob = Start-Job { param($dir) Set-Location $dir; python -m http.server 6007 --directory storybook-static } -ArgumentList (Get-Location)
-    Start-Sleep -Seconds 2
-    npm run test:storybook -- --url http://127.0.0.1:6007
-    Stop-Job $storyJob | Out-Null
-    Remove-Job $storyJob | Out-Null
+    npm run test:storybook:static
 } else {
     npm test
     npm run build

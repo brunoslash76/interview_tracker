@@ -12,7 +12,15 @@ describe("App integration", () => {
     sessionStorage.clear();
   });
 
-  it("renders settings route", async () => {
+  it("renders dashboard route after lazy chunk loads", async () => {
+    installFakeWebSocket({ initialSnapshot: makeSnapshot() });
+    history.replaceState({}, "", "/dashboard");
+    render(<App />);
+    expect(await screen.findByText("Acme")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Scan Gmail now" })).toBeInTheDocument();
+  });
+
+  it("renders settings route after lazy chunk loads", async () => {
     installFakeWebSocket({ initialSnapshot: makeSnapshot() });
     history.replaceState({}, "", "/settings");
     render(<App />);

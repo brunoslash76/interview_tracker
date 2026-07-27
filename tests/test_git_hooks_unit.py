@@ -43,6 +43,13 @@ class GitHooksTests(unittest.TestCase):
         self.assertIn("run_frontend_e2e.sh", runner)
         self.assertIn("commit", runner)
 
+    def test_full_gate_uses_readiness_aware_storybook_runner(self):
+        runner = (PROJECT_ROOT / "scripts" / "run_checks.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("test:storybook:static", runner)
+        self.assertNotIn("sleep 2", runner)
+
     def test_installer_configures_version_controlled_hooks(self):
         installer = (PROJECT_ROOT / "install.sh").read_text(encoding="utf-8")
         hook_installer = (

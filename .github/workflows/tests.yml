@@ -92,10 +92,7 @@ jobs:
         run: npx playwright install --with-deps chromium
         working-directory: frontend
       - name: Run Storybook interaction and accessibility tests
-        run: |
-          python3 -m http.server 6007 --directory storybook-static >/dev/null 2>&1 &
-          sleep 2
-          npm run test:storybook -- --url http://127.0.0.1:6007
+        run: npm run test:storybook:static
         working-directory: frontend
       - name: Upload Storybook static build
         uses: actions/upload-artifact@v4
