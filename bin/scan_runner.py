@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import threading
+import tempfile
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -21,6 +22,7 @@ LOCK_DIRNAME = "scan.lock"
 KNOWN_PHASES = (
     "starting",
     "config",
+    "discovery",
     "extracting",
     "merging",
     "complete",
@@ -48,6 +50,12 @@ def _empty_snapshot() -> dict[str, Any]:
         "updated_count": 0,
         "extracted_count": None,
         "run_id": None,
+        "source": "manual",
+        "sequence": 0,
+        "current": 0,
+        "total": None,
+        "thread_id": None,
+        "updated_at": None,
     }
 
 
@@ -71,9 +79,16 @@ def snapshot_to_dict(snap: dict[str, Any], data_dir: Path) -> dict[str, Any]:
         out["elapsed_seconds"] = round(
             max(0.0, (datetime.now(timezone.utc) - started).total_seconds()), 1
         )
-    file_phase = read_progress_file(progress_file(data_dir)).get("phase")
-    if state_value == ScanState.RUNNING.value and isinstance(file_phase, str) and file_phase:
-        out["phase"] = file_phase
+    disk = read_progress_file(progress_file(data_dir))
+    for key in ("source", "sequence", "current", "total", "thread_id", "updated_at"):
+        out[key] = snap.get(key, disk.get(key))
+    if state_value == ScanState.RUNNING.value and disk:
+        for key in (
+            "phase", "source", "sequence", "current", "total", "thread_id",
+            "updated_at", "started_at", "run_id", "error",
+        ):
+            if key in disk:
+                out[key] = disk[key]
     return out
 
 
@@ -95,15 +110,56 @@ def read_progress_file(path: Path) -> dict[str, Any]:
         return {}
 
 
-def write_progress_file(path: Path, phase: str, detail: str = "") -> None:
+def write_progress_file(
+    path: Path,
+    phase: str,
+    detail: str = "",
+    *,
+    run_id: Optional[str] = None,
+    source: str = "manual",
+    state: Optional[str] = None,
+    sequence: int = 0,
+    current: int = 0,
+    total: Optional[int] = None,
+    thread_id: Optional[str] = None,
+    started_at: Optional[str] = None,
+    finished_at: Optional[str] = None,
+    error: Optional[str] = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
         "phase": phase,
         "updated_at": datetime.now(timezone.utc).isoformat(),
+        "state": state or (
+            "succeeded" if phase == "complete" else "failed" if phase in {"failed", "busy"} else "running"
+        ),
+        "source": source,
+        "sequence": sequence,
+        "current": current,
+        "total": total,
     }
+    if run_id:
+        payload["run_id"] = run_id
+    if thread_id:
+        payload["thread_id"] = thread_id
+    if started_at:
+        payload["started_at"] = started_at
+    if finished_at:
+        payload["finished_at"] = finished_at
+    if error:
+        payload["error"] = error
     if detail:
         payload["detail"] = detail
-    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    finally:
+        if os.path.exists(temp_name):
+            os.unlink(temp_name)
 
 
 def parse_progress_line(line: str) -> Optional[str]:
@@ -138,13 +194,21 @@ class ScanRunner:
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             snap = dict(self._snapshot)
+        disk = read_progress_file(progress_file(self.data_dir))
+        external_running = lock_dir(self.data_dir).is_dir()
+        if external_running and snap["state"] != ScanState.RUNNING:
+            snap = _empty_snapshot()
+            snap.update(disk)
+            snap["state"] = ScanState.RUNNING
+        elif not external_running and disk.get("run_id") and disk.get("run_id") != snap.get("run_id"):
+            snap.update(disk)
         return snapshot_to_dict(snap, self.data_dir)
 
     def is_running(self) -> bool:
         with self._lock:
             return self._snapshot["state"] == ScanState.RUNNING
 
-    def start(self) -> tuple[bool, dict[str, Any]]:
+    def start(self, source: str = "dashboard") -> tuple[bool, dict[str, Any]]:
         with self._lock:
             if self._snapshot["state"] == ScanState.RUNNING:
                 return False, {
@@ -165,16 +229,22 @@ class ScanRunner:
                     "phase": "starting",
                     "started_at": started_at,
                     "run_id": run_id,
+                    "source": source,
+                    "sequence": 1,
+                    "updated_at": started_at,
                 }
             )
             self._stop_poll.clear()
-            self._worker = threading.Thread(target=self._run_scan, args=(run_id,), daemon=True)
+            self._worker = threading.Thread(target=self._run_scan, args=(run_id, source), daemon=True)
             self._worker.start()
             return True, snapshot_to_dict(dict(self._snapshot), self.data_dir)
 
-    def _run_scan(self, run_id: str) -> None:
+    def _run_scan(self, run_id: str, source: str) -> None:
         prog_path = progress_file(self.data_dir)
-        write_progress_file(prog_path, "starting")
+        write_progress_file(
+            prog_path, "starting", run_id=run_id, source=source, sequence=1,
+            started_at=self._snapshot["started_at"],
+        )
         env = os.environ.copy()
         env.setdefault("HOME", str(Path.home()))
         env["INTERVIEW_TRACKER_DATA_DIR"] = str(self.data_dir)
@@ -185,6 +255,10 @@ class ScanRunner:
                 [
                     platform_utils.resolve_python_for_subprocess(self.root),
                     str(self.scan_script),
+                    "--source",
+                    source,
+                    "--run-id",
+                    run_id,
                 ],
                 cwd=str(self.root),
                 env=env,
@@ -202,23 +276,23 @@ class ScanRunner:
                     stderr_lines.append(line)
         except subprocess.TimeoutExpired:
             self._finish_failed(run_id, "scan timed out")
-            write_progress_file(prog_path, "failed", "timeout")
+            write_progress_file(prog_path, "failed", "timeout", run_id=run_id, source=source, error="timeout")
             return
         except Exception as exc:
             self._finish_failed(run_id, str(exc))
-            write_progress_file(prog_path, "failed", str(exc))
+            write_progress_file(prog_path, "failed", str(exc), run_id=run_id, source=source, error=str(exc))
             return
 
         file_progress = read_progress_file(prog_path)
         phase = str(file_progress.get("phase") or "")
         if result.returncode == 2 or phase == "busy":
             self._finish_failed(run_id, "another scan is already running")
-            write_progress_file(prog_path, "busy", "scan lock held")
+            write_progress_file(prog_path, "busy", "scan lock held", run_id=run_id, source=source)
             return
         if result.returncode != 0:
             detail = file_progress.get("detail") or result.stderr.strip() or "scan script failed"
             self._finish_failed(run_id, str(detail))
-            write_progress_file(prog_path, "failed", str(detail))
+            write_progress_file(prog_path, "failed", str(detail), run_id=run_id, source=source, error=str(detail))
             return
 
         summary = database.get_latest_summary(self.db_path) or {}
@@ -231,7 +305,12 @@ class ScanRunner:
             detail = file_progress.get("detail")
             if isinstance(detail, str) and detail.isdigit():
                 self._snapshot["extracted_count"] = int(detail)
-        write_progress_file(prog_path, "complete")
+        write_progress_file(
+            prog_path, "complete", run_id=run_id, source=source,
+            current=int(file_progress.get("current") or 0),
+            total=file_progress.get("total"),
+            finished_at=self._snapshot["finished_at"],
+        )
 
     def _finish_failed(self, run_id: str, message: str) -> None:
         with self._lock:

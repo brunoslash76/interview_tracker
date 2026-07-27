@@ -90,7 +90,7 @@ def write_fake_claude(output_path: Path, interviews: list[dict[str, Any]]) -> Pa
     script.write_text(
         f"""#!/bin/bash
 if [[ -n "${{CLAUDE_ARGS_LOG:-}}" ]]; then
-  printf '%s\\n' "$@" > "${{CLAUDE_ARGS_LOG}}"
+  printf '%s\\n' "$@" >> "${{CLAUDE_ARGS_LOG}}"
 fi
 cat <<'EOF'
 {envelope}
