@@ -12,7 +12,7 @@ from tests.support import PROJECT_ROOT
 class GitHooksTests(unittest.TestCase):
     def test_hooks_are_executable_and_run_expected_check_levels(self):
         expectations = {
-            ".githooks/pre-commit": "run_checks.sh\" quick",
+            ".githooks/pre-commit": "run_checks.sh\" commit",
             ".githooks/pre-push": "run_checks.sh\" full",
         }
         for relative_path, expected_command in expectations.items():
@@ -35,6 +35,13 @@ class GitHooksTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 2)
         self.assertIn("Usage:", result.stderr)
+
+    def test_commit_mode_runs_frontend_e2e_helper(self):
+        runner = (PROJECT_ROOT / "scripts" / "run_checks.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("run_frontend_e2e.sh", runner)
+        self.assertIn("commit", runner)
 
     def test_installer_configures_version_controlled_hooks(self):
         installer = (PROJECT_ROOT / "install.sh").read_text(encoding="utf-8")

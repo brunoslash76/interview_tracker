@@ -46,10 +46,38 @@ class CoverageToolingTests(unittest.TestCase):
         self.assertIn("coverage report --fail-under=80", runner)
         self.assertIn("coverage json -o coverage.json", runner)
         self.assertIn("coverage.svg", runner)
+        self.assertIn("frontend-coverage.svg", runner)
+        self.assertIn("coverage-summary.json", runner)
 
-    def test_readme_displays_generated_coverage_badge(self):
+    def test_badge_generator_accepts_vitest_summary(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            report = root / "coverage-summary.json"
+            badge = root / "frontend.svg"
+            report.write_text(
+                json.dumps({"total": {"statements": {"pct": 91.2}}}),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "scripts" / "generate_coverage_badge.py"),
+                    str(report),
+                    str(badge),
+                    "--label",
+                    "frontend",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            rendered = badge.read_text(encoding="utf-8")
+            self.assertIn("frontend: 91%", rendered)
+
+    def test_readme_displays_generated_coverage_badges(self):
         readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("![Python coverage](coverage.svg)", readme)
+        self.assertIn("![Frontend coverage](frontend-coverage.svg)", readme)
 
 
 if __name__ == "__main__":
