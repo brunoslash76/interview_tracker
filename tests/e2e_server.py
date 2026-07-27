@@ -42,12 +42,15 @@ def _seed_records(db_path: Path) -> None:
     database.import_records(records, db_path)
 
 
-def _patch_scheduler(local_server, scheduler) -> None:
+def _patch_scheduler(local_server) -> None:
     def apply_settings(email, scan_times, root, home, data_dir, db_path=None):
         saved = database.update_user_settings(email, scan_times, db_path or local_server.DB_FILE)
         return {"status": "ok", **saved}
 
-    scheduler.apply_settings_with_rollback = apply_settings
+    # Patch the exact scheduler module referenced by local_server. Loading
+    # scheduler.py a second time creates a different module and leaves the
+    # real launchd/systemd/schtasks backend active.
+    local_server.scheduler.apply_settings_with_rollback = apply_settings
 
 
 def main() -> int:
@@ -62,14 +65,13 @@ def main() -> int:
     claude_bin = Path(os.environ["CLAUDE_BIN"])
 
     local_server = load_bin_module("local_server")
-    scheduler = load_bin_module("scheduler")
     local_server.DATA_DIR = data_dir
     local_server.DB_FILE = db_path
     local_server.STATE.host = args.host
     local_server.STATE.port = args.port
 
     _seed_records(db_path)
-    _patch_scheduler(local_server, scheduler)
+    _patch_scheduler(local_server)
 
     config_env = data_dir / "config.env"
     config_env.write_text(f'CLAUDE_BIN="{claude_bin}"\n', encoding="utf-8")
