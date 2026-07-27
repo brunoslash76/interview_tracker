@@ -2,6 +2,7 @@
 
 [![Tests](https://github.com/brunoslash76/interview_tracker/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/brunoslash76/interview_tracker/actions/workflows/tests.yml)
 ![Python coverage](coverage.svg)
+![Frontend coverage](frontend-coverage.svg)
 
 Interview Tracker is a local automation for **macOS, Windows, and Linux** that scans Gmail
 for job-interview threads, merges structured results into a private SQLite
@@ -44,10 +45,20 @@ All platforms follow the same core pipeline; background integration differs as
 in [Supported platforms](#supported-platforms).
 
 1. A **scheduled or manual scan** runs `bin/scan_gmail.py` (wrapper: `bin/scan_gmail.sh` on Unix) at times stored in SQLite **Settings**, or when you choose **Refresh Now** / **Scan Gmail now**.
-2. The scan runs the **Claude CLI** headlessly with only the Gmail thread-search and thread-read MCP tools. Scans started less than 30 minutes after the previous success use an exact Gmail epoch boundary from the newest message Claude actually read. Older runs use a five-day overlap; the first scan looks back 120 days.
-3. Claude returns schema-constrained JSON; `bin/merge_interviews.py` merges it into SQLite and regenerates the private dashboard.
+2. The scan runs a **search-only Claude CLI discovery pass**, deduplicates matching
+   Gmail thread IDs, and publishes that total. It then runs a streamed thread-read
+   pass and reports completed threads in real time. The total is matching threads,
+   not individual messages.
+3. Claude returns schema-constrained JSON; `bin/merge_interviews.py` merges it into
+   SQLite and regenerates the private read-only dashboard export.
 4. **Notifications** compare the latest scan summary hash to `.last_notified_hash`. Unchanged data stays silent. Changed data triggers a desktop alert (and optional ntfy push when configured).
-5. The **menu bar (macOS)** or **system tray (Windows/Linux)** app starts a loopback-only web server, reads SQLite, refreshes counts when the database changes, and opens dashboard/settings in the browser.
+5. The **menu bar (macOS)** or **system tray (Windows/Linux)** app starts a
+   loopback-only FastAPI server and the compiled React application. An authenticated
+   WebSocket pushes scan progress, settings, and dashboard changes without reloads.
+
+Scans started by the dashboard, tray/menu, command line, or OS scheduler share
+`scan.lock/` and `.scan_progress.json`. An open dashboard therefore shows
+scheduled scans too, including a start toast and a minimizable activity button.
 
 Platform specifics:
 
@@ -88,6 +99,12 @@ Portable templates: **`launchd/`** (macOS), Task Scheduler XML under **`%LOCALAP
 ### All platforms
 
 - **Settings / dashboard:** start the tray or menu app so the loopback server runs, then open **Settings** or **Open Full Dashboard**. CSRF-protected writes require that server; the static `dashboard.html` file alone cannot save settings.
+- **Live scan progress:** discovery is indeterminate until Claude returns the
+  deduplicated thread total. Thread reads then update a determinate bar. Minimize
+  the scan modal to a top-right activity button and reopen it at any time.
+- **Connection indicator:** a green dot means the browser WebSocket is connected
+  to the local Python backend. The client reconnects and restores current state
+  after a temporary disconnect.
 - **Override install location:** set `INTERVIEW_TRACKER_DATA_DIR` before install, then re-run the installer for your OS so schedulers pick up the path.
 
 ## Prerequisites
@@ -583,6 +600,7 @@ delete that folder only if you intend to wipe records and config.
 ## Source tree and privacy
 
 - `bin/` contains SQLite, scan, merge, notifier, migration, menu/tray, and scheduler code.
+- `frontend/` contains the React/TypeScript source and the shipped production bundle.
 - `launchd/` contains portable macOS LaunchAgent templates.
 - `install.sh`, `install-linux.sh`, and `install.ps1` are platform installers.
 - `InterviewTracker.app/` is a minimal macOS menu-bar wrapper, not a self-contained
@@ -600,8 +618,8 @@ were already committed.
 
 ## Tests
 
-The suite uses **stdlib `unittest`** for test cases and `coverage.py` for Python
-line/branch measurement. Tests never call live Claude/Gmail, ntfy, or your private
+The backend suite uses **stdlib `unittest`** and `coverage.py`; the React app uses
+**Vitest + React Testing Library**. Tests never call live Claude/Gmail, ntfy, or your private
 `~/Library/Application Support/InterviewTracker` data. Integration tests set
 temporary `HOME` and `INTERVIEW_TRACKER_DATA_DIR` and use fixture fakes under
 [`tests/fixtures/`](/Users/bruno/Automations/email-reader/tests/fixtures/).
@@ -616,17 +634,40 @@ python3 -m unittest discover -s tests -p 'test_*_unit.py' -v
 # Integration tests (shell/settings; macOS launchd paths in some tests)
 python3 -m unittest discover -s tests -p 'test_integration_*.py' -v
 
+# React unit/integration tests, coverage (full gate), and production build
+cd frontend && npm ci && npm test && npm run build
+cd frontend && npm run test:coverage          # full gate: 80% / 75% thresholds
+
+# Storybook (local docs + interaction/a11y via test-runner)
+cd frontend && npm run storybook
+cd frontend && npm run build-storybook
+cd frontend && npm run test:storybook -- --url http://127.0.0.1:6007
+
+# Playwright full-stack E2E (temp data dir + fake Claude; real FastAPI + built UI)
+cd frontend && npx playwright install --with-deps chromium
+cd frontend && npm run test:e2e
+cd frontend && npx playwright test --project=firefox
+
 # Platform-specific quick gates (also run in CI)
-bash scripts/run_checks.sh full          # macOS: full + coverage
+bash scripts/run_checks.sh full          # macOS: Python coverage + frontend coverage + Storybook
 pwsh scripts/run_checks.ps1 quick        # Windows
-bash scripts/run_checks_linux.sh quick # Linux
+bash scripts/run_checks_linux.sh quick   # Linux
 ```
+
+| Layer | Location | Notes |
+|------|----------|--------|
+| Frontend unit | `frontend/src/**/*.test.ts(x)` | utilities, hooks, components |
+| Frontend integration | `frontend/src/App.integration.test.tsx` | full tree + fake WebSocket |
+| Storybook | `frontend/src/**/*.stories.tsx` | component states, `play` interactions, axe |
+| Playwright E2E | `frontend/e2e/` | Chromium/Firefox/WebKit × macOS/Windows/Linux in CI |
+| E2E server | `tests/e2e_server.py` | temp `INTERVIEW_TRACKER_DATA_DIR`, seeded SQLite |
+| Fake Claude (E2E) | `tests/e2e/fixtures/fake_claude*` | discovery JSON + delayed `stream-json` |
 
 | Area | Files |
 |------|--------|
 | SQLite, settings, merge | `tests/test_database_unit.py` |
 | Scheduler plist + rollback | `tests/test_scheduler_unit.py` |
-| Loopback HTTP / CSRF | `tests/test_local_server_unit.py` |
+| FastAPI / WebSocket / CSRF | `tests/test_local_server_unit.py` |
 | Legacy migration | `tests/test_migration_unit.py` |
 | Dashboard render / CLI | `tests/test_merge_unit.py` |
 | Menu-bar heuristics | `tests/test_menubar_logic_unit.py` |
@@ -635,25 +676,35 @@ bash scripts/run_checks_linux.sh quick # Linux
 | Python scan pipeline | `tests/test_integration_scan.py` |
 | Platform paths / systemd / Task Scheduler units | `tests/test_platform_unit.py`, `tests/test_scheduler_systemd_unit.py`, `tests/test_scheduler_windows_unit.py` |
 
-CI runs on **`macos-latest`** (full gate + coverage), **`windows-latest`**, and
-**`ubuntu-latest`** via
+CI runs a **`pre-commit-gate`** job on Ubuntu (Vitest + Chromium E2E), matching
+**`macos-latest`** (full Python + frontend coverage + Storybook build/tests),
+**`ubuntu-latest`** Storybook job, a **3×3 Playwright matrix** (OS × browser), plus
+**`windows-latest`** and **`ubuntu-latest`** quick Python gates via
 [`.github/workflows/tests.yml`](/Users/bruno/Automations/email-reader/.github/workflows/tests.yml).
-The badge at the top reflects the macOS workflow on `main`.
+The badge at the top reflects the macOS workflow on `main`. **`coverage.svg`** and
+**`frontend-coverage.svg`** are refreshed during the macOS full gate (`bash scripts/run_checks.sh full`)
+and must stay committed with the README.
 
 Python coverage includes `bin/*.py`, except GUI entry points `bin/menubar_app.py`
 and `bin/tray_app.py`; shared logic is covered in modules such as
 `bin/menubar_logic.py`. The full macOS gate enforces at least **80%** combined
 line/branch coverage and refreshes `coverage.svg`.
-Dashboard JavaScript behavior is exercised separately by the Node component
-harness and is not included in the Python percentage.
+The React app enforces **80%** statements/lines/functions and **75%** branches under
+`frontend/src/` via Vitest coverage (entrypoints, fixtures, stories, and test helpers
+are excluded).
+
+**E2E troubleshooting:** ensure `frontend/dist` is built, port **8765** is free, and
+Playwright browsers are installed. Traces, screenshots, and videos are kept on failure
+under `frontend/test-results/` and `frontend/playwright-report/`.
 
 ### Git hooks
 
 The installer enables the version-controlled hooks in `.githooks/`:
 
-- `pre-commit` runs shell/plist validation plus unit and dashboard component
-  tests;
-- `pre-push` runs the same checks plus the macOS integration suite.
+- `pre-commit` runs `scripts/run_checks.sh commit`: shell/plist validation, Python
+  unit tests, **Vitest** (frontend unit/integration), production build, and **Playwright
+  E2E (Chromium)** against the hermetic test server;
+- `pre-push` runs `scripts/run_checks.sh full` (coverage, Storybook, integration tests).
 
 Enable them without reinstalling the app:
 
@@ -664,11 +715,15 @@ bash scripts/install_git_hooks.sh
 Run either check set directly:
 
 ```sh
-bash scripts/run_checks.sh quick   # macOS-oriented (includes plutil / launchd)
-bash scripts/run_checks.sh full
-pwsh scripts/run_checks.ps1 quick
-bash scripts/run_checks_linux.sh quick
+bash scripts/run_checks.sh commit   # same as pre-commit (macOS; includes plutil)
+bash scripts/run_checks.sh quick    # unit tests without Playwright E2E
+bash scripts/run_checks.sh full     # pre-push / full macOS gate
+pwsh scripts/run_checks.ps1 commit
+bash scripts/run_checks_linux.sh commit
 ```
+
+CI runs the same **commit** gate on Ubuntu, Windows, and Linux (`pre-commit-gate` job)
+before the full macOS gate and the 3×3 Playwright matrix.
 
 A failed check blocks the commit or push. Git’s standard `--no-verify` option
 remains available for emergencies, but CI still runs the full suite.
@@ -679,6 +734,12 @@ remains available for emergencies, but CI still runs the full suite.
 
 - **Claude CLI not found:** run `which claude` (or `Get-Command claude` on Windows), set `CLAUDE_BIN=...` in private `config.env`, then run a [manual scan](#daily-use-by-os).
 - **Gmail scan fails:** confirm Claude works interactively and Gmail MCP tools are connected. Check `logs/scan.log`.
+- **Discovery or streaming is unsupported:** update the Claude CLI. Live progress
+  requires `--output-format stream-json --verbose`; older CLI releases fail with
+  a clear scan error rather than showing estimated progress.
+- **Live connection is offline:** keep the menu/tray app running, reload the
+  loopback dashboard URL, and check menu/tray logs. The backend binds only to
+  `127.0.0.1`; proxies and non-local origins are intentionally rejected.
 - **Gmail scan fails only on a schedule:** background PATH is limited — set `CLAUDE_BIN` to an absolute path in `config.env`, then reload schedulers (`python3 bin/scheduler.py sync` or re-run your OS installer).
 - **No ntfy push:** verify `NTFY_TOPIC` in private config. Treat the topic as a secret.
 - **Dashboard is stale:** run `python3 bin/merge_interviews.py`.
