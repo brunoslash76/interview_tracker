@@ -109,6 +109,10 @@ Portable templates: **`launchd/`** (macOS), Task Scheduler XML under **`%LOCALAP
 
 ## Prerequisites
 
+The installers use the pre-built React assets committed under `frontend/dist`;
+Node.js and npm are only required for frontend development and tests, not for a
+normal installation.
+
 ### macOS
 
 - macOS 11 or later

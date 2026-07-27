@@ -65,6 +65,11 @@ class GitHooksTests(unittest.TestCase):
         self.assertIn('scripts/install_git_hooks.sh"', installer)
         self.assertIn("core.hooksPath .githooks", hook_installer)
 
+    def test_macos_installer_always_refreshes_runtime_dependencies(self):
+        installer = (PROJECT_ROOT / "install.sh").read_text(encoding="utf-8")
+        self.assertIn('pip install --quiet -r "${ROOT}/requirements-dev.txt"', installer)
+        self.assertNotIn("-m coverage --version", installer)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -70,7 +70,7 @@ project_venv_ready() {
     && "${ROOT}/venv/bin/python3" -m pip --version >/dev/null 2>&1
 }
 
-install_python_dependencies() {
+prepare_project_environment() {
   echo "Creating runtime folders…"
   mkdir -p "${DATA_DIR}/logs" "${AGENT_DIR}"
 
@@ -97,17 +97,12 @@ install_python_dependencies() {
   if [ ! -d "${ROOT}/venv" ]; then
     echo "Creating project virtual environment at ${ROOT}/venv …"
     "${PYTHON}" -m venv "${ROOT}/venv"
-  elif [ ! -x "${ROOT}/venv/bin/python3" ]; then
+  elif [ ! -x "${ROOT}/venv/bin/python3" ] \
+      || ! "${ROOT}/venv/bin/python3" -m pip --version >/dev/null 2>&1; then
     echo "Recreating incomplete project virtual environment…"
     rm -rf "${ROOT}/venv"
     "${PYTHON}" -m venv "${ROOT}/venv"
   fi
-
-  echo "Installing menu-bar dependencies (pip, rumps, pyobjc)…"
-  "${ROOT}/venv/bin/python3" -m pip install --quiet --upgrade pip
-  "${ROOT}/venv/bin/python3" -m pip install --quiet rumps pyobjc
-  "${ROOT}/venv/bin/python3" -m pip install --quiet -r "${ROOT}/requirements-dev.txt"
-  echo "Python dependencies installed."
 }
 
 echo "Checking Python prerequisites…"
@@ -130,16 +125,17 @@ if [ "${needs_setup}" -eq 1 ]; then
     echo "Installation cancelled."
     exit 1
   fi
-  install_python_dependencies
+  prepare_project_environment
 else
   echo "Python prerequisites OK."
   mkdir -p "${DATA_DIR}/logs" "${AGENT_DIR}"
 fi
 
-if ! "${ROOT}/venv/bin/python3" -m coverage --version >/dev/null 2>&1; then
-  echo "Installing development coverage tooling…"
-  "${ROOT}/venv/bin/python3" -m pip install --quiet -r "${ROOT}/requirements-dev.txt"
-fi
+echo "Installing or updating Python runtime and development dependencies…"
+"${ROOT}/venv/bin/python3" -m pip install --quiet --upgrade pip
+"${ROOT}/venv/bin/python3" -m pip install --quiet rumps pyobjc
+"${ROOT}/venv/bin/python3" -m pip install --quiet -r "${ROOT}/requirements-dev.txt"
+echo "Python dependencies are up to date."
 
 # --- permissions + folders --------------------------------------------------
 chmod +x "${ROOT}/bin/scan_gmail.sh" "${ROOT}/bin/scan_gmail.py" "${ROOT}/bin/macos_notifier.sh" \
