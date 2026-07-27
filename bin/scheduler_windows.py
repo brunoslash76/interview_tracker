@@ -43,7 +43,7 @@ def build_scan_task_xml(
     actions = ET.SubElement(task, "Actions")
     action = ET.SubElement(actions, "Exec")
     ET.SubElement(action, "Command").text = python
-    ET.SubElement(action, "Arguments").text = f'"{script}"'
+    ET.SubElement(action, "Arguments").text = f'"{script}" --source scheduled'
     ET.SubElement(action, "WorkingDirectory").text = str(root)
     settings = ET.SubElement(task, "Settings")
     ET.SubElement(settings, "MultipleInstancesPolicy").text = "IgnoreNew"

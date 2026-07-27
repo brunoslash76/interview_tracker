@@ -114,7 +114,12 @@ class TrayApp:
 
         try:
             subprocess.run(
-                [platform_utils.resolve_python_for_subprocess(ROOT), str(SCAN_SCRIPT)],
+                [
+                    platform_utils.resolve_python_for_subprocess(ROOT),
+                    str(SCAN_SCRIPT),
+                    "--source",
+                    "tray",
+                ],
                 cwd=str(ROOT),
                 check=False,
             )

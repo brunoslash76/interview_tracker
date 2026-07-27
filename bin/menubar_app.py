@@ -131,7 +131,12 @@ class InterviewTrackerApp(rumps.App):
     def _run_scan(self):
         try:
             subprocess.run(
-                [platform_utils.resolve_python_for_subprocess(ROOT), str(SCAN_SCRIPT)],
+                [
+                    platform_utils.resolve_python_for_subprocess(ROOT),
+                    str(SCAN_SCRIPT),
+                    "--source",
+                    "tray",
+                ],
                 check=False,
                 cwd=str(ROOT),
             )

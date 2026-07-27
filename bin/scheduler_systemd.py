@@ -55,7 +55,7 @@ Description=Interview Tracker Gmail scan
 [Service]
 Type=oneshot
 WorkingDirectory={root}
-ExecStart={python} {script}
+ExecStart={python} {script} --source scheduled
 {_service_environment(root, home, data_dir)}
 StandardOutput=append:{out_log}
 StandardError=append:{err_log}

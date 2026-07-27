@@ -31,7 +31,12 @@ def build_plist_dict(
     python = platform_utils.resolve_python_for_subprocess(root)
     plist: dict[str, Any] = {
         "Label": SCHEDULER_LABEL,
-        "ProgramArguments": [python, str(root / "bin" / "scan_gmail.py")],
+        "ProgramArguments": [
+            python,
+            str(root / "bin" / "scan_gmail.py"),
+            "--source",
+            "scheduled",
+        ],
         "RunAtLoad": False,
         "WorkingDirectory": str(root),
         "StandardOutPath": str(data_dir / "logs" / "scheduler.out.log"),
