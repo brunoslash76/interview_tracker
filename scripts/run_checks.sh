@@ -33,7 +33,19 @@ bash -n .githooks/pre-commit
 bash -n .githooks/pre-push
 
 echo "Validating launchd templates…"
-plutil -lint launchd/*.plist InterviewTracker.app/Contents/Info.plist >/dev/null
+PLIST_FILES=(launchd/*.plist InterviewTracker.app/Contents/Info.plist)
+if command -v plutil >/dev/null 2>&1; then
+  plutil -lint "${PLIST_FILES[@]}" >/dev/null
+else
+  "${PYTHON}" -c '
+import plistlib
+import sys
+
+for path in sys.argv[1:]:
+    with open(path, "rb") as plist:
+        plistlib.load(plist)
+' "${PLIST_FILES[@]}"
+fi
 
 if ! command -v node >/dev/null 2>&1; then
   echo "ERROR: Node.js is required for dashboard component tests." >&2

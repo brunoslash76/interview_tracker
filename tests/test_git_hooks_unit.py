@@ -43,6 +43,13 @@ class GitHooksTests(unittest.TestCase):
         self.assertIn("run_frontend_e2e.sh", runner)
         self.assertIn("commit", runner)
 
+    def test_check_runner_validates_plists_without_macos_plutil(self):
+        runner = (PROJECT_ROOT / "scripts" / "run_checks.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("command -v plutil", runner)
+        self.assertIn("plistlib.load", runner)
+
     def test_full_gate_uses_readiness_aware_storybook_runner(self):
         runner = (PROJECT_ROOT / "scripts" / "run_checks.sh").read_text(
             encoding="utf-8"
