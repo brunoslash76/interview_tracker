@@ -9,6 +9,14 @@ __pycache__/
 .pycache/
 *.py[cod]
 
+# Frontend dependencies and caches (compiled dist is shipped)
+frontend/node_modules/
+frontend/.vite/
+frontend/coverage/
+frontend/storybook-static/
+frontend/playwright-report/
+frontend/test-results/
+
 # Private configuration and runtime state
 config.env
 .ntfy_topic

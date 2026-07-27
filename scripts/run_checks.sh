@@ -5,9 +5,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-quick}"
 
 case "${MODE}" in
-  quick|full) ;;
+  quick|full|commit) ;;
   *)
-    echo "Usage: $0 [quick|full]" >&2
+    echo "Usage: $0 [quick|commit|full]" >&2
     exit 2
     ;;
 esac
@@ -27,6 +27,7 @@ bash -n bin/scan_gmail.sh
 bash -n bin/macos_notifier.sh
 bash -n InterviewTracker.app/Contents/MacOS/InterviewTracker
 bash -n scripts/run_checks.sh
+bash -n scripts/run_frontend_e2e.sh
 bash -n scripts/install_git_hooks.sh
 bash -n .githooks/pre-commit
 bash -n .githooks/pre-push
@@ -43,7 +44,35 @@ fi
 echo "Validating dashboard component harness…"
 node --check tests/dashboard_component_harness.js
 
-if [ "${MODE}" = "quick" ]; then
+if [ ! -d "${ROOT}/frontend/node_modules" ]; then
+  echo "Installing frontend test dependencies…"
+  (cd frontend && npm ci)
+fi
+echo "Testing and building React frontend…"
+if [ "${MODE}" = "full" ]; then
+  (cd frontend && npm run test:coverage && npm run build)
+  "${PYTHON}" scripts/generate_coverage_badge.py \
+    frontend/coverage/coverage-summary.json frontend-coverage.svg --label frontend
+  if ! git diff --quiet HEAD -- frontend-coverage.svg; then
+    echo "ERROR: frontend-coverage.svg changed. Commit the refreshed README badge." >&2
+    exit 1
+  fi
+  echo "Building and testing Storybook…"
+  (cd frontend && npm run build-storybook)
+  python3 -m http.server 6007 --directory frontend/storybook-static >/dev/null 2>&1 &
+  STORYBOOK_PID=$!
+  sleep 2
+  (cd frontend && npm run test:storybook -- --url http://127.0.0.1:6007) || { kill "${STORYBOOK_PID}" 2>/dev/null || true; exit 1; }
+  kill "${STORYBOOK_PID}" 2>/dev/null || true
+else
+  (cd frontend && npm test && npm run build)
+fi
+
+if [ "${MODE}" = "commit" ]; then
+  bash "${ROOT}/scripts/run_frontend_e2e.sh" chromium
+fi
+
+if [ "${MODE}" = "quick" ] || [ "${MODE}" = "commit" ]; then
   echo "Running unit and component tests…"
   "${PYTHON}" -m unittest discover -s tests -p 'test_*_unit.py' -v
 else

@@ -4,4 +4,4 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 
 echo "Running pre-commit checks…"
-exec "${ROOT}/scripts/run_checks.sh" quick
+exec "${ROOT}/scripts/run_checks.sh" commit
