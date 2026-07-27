@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
-"""Loopback HTTP server for the dashboard and scan settings UI."""
+"""Loopback FastAPI server for the live dashboard and scan settings UI."""
 
 from __future__ import annotations
 
 import html
 import json
-import os
+import asyncio
+import contextlib
 import secrets
+import socket
 import threading
-from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urlparse
+
+import uvicorn
+from fastapi import Cookie, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 import database
 import platform_utils
@@ -24,6 +29,7 @@ DATA_DIR = platform_utils.default_data_dir()
 DB_FILE = DATA_DIR / database.DEFAULT_DB_NAME
 DASHBOARD_TEMPLATE = ROOT / "dashboard_template.html"
 SETTINGS_TEMPLATE = ROOT / "settings_template.html"
+FRONTEND_DIST = ROOT / "frontend" / "dist"
 CSRF_COOKIE = "it_csrf"
 MAX_BODY_BYTES = 16_384
 
@@ -36,13 +42,14 @@ class LocalServerState:
     def __init__(self) -> None:
         self.host = "127.0.0.1"
         self.port = 0
-        self.httpd: Optional[ThreadingHTTPServer] = None
+        self.server: Optional[uvicorn.Server] = None
         self.thread: Optional[threading.Thread] = None
         self.lock = threading.Lock()
 
 
 STATE = LocalServerState()
 _SCAN_RUNNER: Optional[scan_runner.ScanRunner] = None
+CSRF_TOKEN = secrets.token_urlsafe(32)
 
 
 def get_scan_runner() -> scan_runner.ScanRunner:
@@ -101,169 +108,280 @@ def settings_url() -> Optional[str]:
     return base.replace("/dashboard", "/settings")
 
 
-class InterviewTrackerHandler(BaseHTTPRequestHandler):
-    server_version = "InterviewTrackerLocal/1.0"
+def _allowed_host(host: str) -> bool:
+    return host in {f"{STATE.host}:{STATE.port}", f"localhost:{STATE.port}"}
 
-    def log_message(self, format: str, *args: Any) -> None:
+
+def _allowed_origin(origin: str) -> bool:
+    if not origin:
+        return False
+    return origin.rstrip("/") in {
+        f"http://{STATE.host}:{STATE.port}",
+        f"http://localhost:{STATE.port}",
+    }
+
+
+def _csrf_valid(cookie: str, header: str) -> bool:
+    return bool(cookie and header) and secrets.compare_digest(cookie, header) and secrets.compare_digest(
+        cookie, CSRF_TOKEN
+    )
+
+
+def app_snapshot() -> dict[str, Any]:
+    return {
+        "dashboard": scan_runner.dashboard_payload(DB_FILE),
+        "settings": database.get_user_settings(DB_FILE),
+        "scan": get_scan_runner().snapshot(),
+    }
+
+
+class ConnectionManager:
+    def __init__(self) -> None:
+        self.connections: set[WebSocket] = set()
+
+    async def connect(self, websocket: WebSocket) -> None:
+        await websocket.accept()
+        self.connections.add(websocket)
+
+    async def disconnect(self, websocket: WebSocket) -> None:
+        self.connections.discard(websocket)
+
+    async def broadcast(self, event_type: str, payload: Any) -> None:
+        message = {"version": 1, "type": event_type, "payload": payload}
+        stale: list[WebSocket] = []
+        for websocket in list(self.connections):
+            try:
+                await websocket.send_json(message)
+            except Exception:
+                stale.append(websocket)
+        for websocket in stale:
+            await self.disconnect(websocket)
+
+
+MANAGER = ConnectionManager()
+
+
+@contextlib.asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.watcher = asyncio.create_task(_event_watcher())
+    try:
+        yield
+    finally:
+        app.state.watcher.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await app.state.watcher
+
+
+APP = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+
+
+@APP.middleware("http")
+async def security_middleware(request: Request, call_next):
+    if not _allowed_host(request.headers.get("host", "")):
+        return JSONResponse({"error": "invalid host"}, status_code=403)
+    response = await call_next(request)
+    if request.url.path in {"/", "/dashboard", "/settings"}:
+        response.set_cookie(CSRF_COOKIE, CSRF_TOKEN, httponly=True, samesite="strict", path="/")
+    return response
+
+
+def _require_mutation(request: Request, cookie: str, header: str) -> None:
+    if not _allowed_origin(request.headers.get("origin") or request.headers.get("referer", "")):
+        raise HTTPException(403, "invalid origin")
+    if not _csrf_valid(cookie, header):
+        raise HTTPException(403, "invalid csrf token")
+
+
+async def _json_payload(request: Request) -> dict[str, Any]:
+    length = int(request.headers.get("content-length", "0"))
+    if length > MAX_BODY_BYTES:
+        raise HTTPException(400, "request body too large")
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "JSON body must be an object")
+    return payload
+
+
+def _react_index() -> FileResponse | HTMLResponse:
+    index = FRONTEND_DIST / "index.html"
+    if index.is_file():
+        return FileResponse(index)
+    return HTMLResponse("<h1>Frontend is not built</h1><p>Run npm run build in frontend/.</p>", 503)
+
+
+@APP.get("/")
+async def root():
+    return RedirectResponse("/dashboard", status_code=307)
+
+
+@APP.get("/dashboard")
+@APP.get("/settings")
+async def react_page():
+    return _react_index()
+
+
+@APP.get("/api/settings")
+async def get_settings():
+    return database.get_user_settings(DB_FILE)
+
+
+@APP.get("/api/scan/status")
+async def get_scan_status():
+    return get_scan_runner().snapshot()
+
+
+@APP.get("/api/dashboard-data")
+async def get_dashboard_data():
+    return scan_runner.dashboard_payload(DB_FILE)
+
+
+async def _save_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    scan_times = payload.get("scan_times", [])
+    if not isinstance(scan_times, list):
+        raise ValueError("scan_times must be an array")
+    saved = await asyncio.to_thread(
+        scheduler.apply_settings_with_rollback,
+        payload.get("email", ""),
+        scan_times,
+        ROOT,
+        Path.home(),
+        DATA_DIR,
+        DB_FILE,
+    )
+    await MANAGER.broadcast("settings.updated", saved)
+    return saved
+
+
+@APP.api_route("/api/settings", methods=["PUT", "POST"])
+async def update_settings(
+    request: Request,
+    it_csrf: str = Cookie(default="", alias=CSRF_COOKIE),
+    x_csrf_token: str = Header(default=""),
+):
+    _require_mutation(request, it_csrf, x_csrf_token)
+    payload = await _json_payload(request)
+    try:
+        return await _save_settings(payload)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@APP.post("/api/scan", status_code=202)
+async def start_scan(
+    request: Request,
+    it_csrf: str = Cookie(default="", alias=CSRF_COOKIE),
+    x_csrf_token: str = Header(default=""),
+):
+    _require_mutation(request, it_csrf, x_csrf_token)
+    started, payload = get_scan_runner().start(source="dashboard")
+    if not started:
+        raise HTTPException(409, payload.get("error", "scan busy"))
+    await MANAGER.broadcast("scan.started", payload)
+    return {"status": payload}
+
+
+@APP.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    if not _allowed_host(websocket.headers.get("host", "")) or not _allowed_origin(
+        websocket.headers.get("origin", "")
+    ):
+        await websocket.close(code=1008)
         return
+    if not secrets.compare_digest(websocket.cookies.get(CSRF_COOKIE, ""), CSRF_TOKEN):
+        await websocket.close(code=1008)
+        return
+    await MANAGER.connect(websocket)
+    try:
+        await websocket.send_json({"version": 1, "type": "app.snapshot", "payload": app_snapshot()})
+        while True:
+            message = await websocket.receive_json()
+            request_id = message.get("request_id")
+            event_type = message.get("type")
+            try:
+                if message.get("version") != 1:
+                    raise ValueError("unsupported protocol version")
+                if event_type == "snapshot.request":
+                    response_type, payload = "app.snapshot", app_snapshot()
+                elif event_type == "scan.start":
+                    started, payload = get_scan_runner().start(source="dashboard")
+                    if not started:
+                        raise ValueError(payload.get("error", "scan busy"))
+                    response_type = "scan.started"
+                    await MANAGER.broadcast(response_type, payload)
+                elif event_type == "settings.save":
+                    payload = await _save_settings(message.get("payload") or {})
+                    response_type = "settings.updated"
+                else:
+                    raise ValueError("unknown command")
+                await websocket.send_json(
+                    {"version": 1, "type": response_type, "request_id": request_id, "payload": payload}
+                )
+            except Exception as exc:
+                await websocket.send_json(
+                    {"version": 1, "type": "error", "request_id": request_id, "payload": {"error": str(exc)}}
+                )
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await MANAGER.disconnect(websocket)
 
-    @property
-    def csrf_token(self) -> str:
-        return getattr(self.server, "csrf_token", "")
 
-    def _expected_host(self) -> str:
-        return f"{STATE.host}:{self.server.server_address[1]}"
+if FRONTEND_DIST.is_dir():
+    APP.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
 
-    def _validate_host(self) -> bool:
-        host = self.headers.get("Host", "")
-        return host in {self._expected_host(), f"localhost:{self.server.server_address[1]}"}
 
-    def _validate_origin(self) -> bool:
-        origin = self.headers.get("Origin") or self.headers.get("Referer") or ""
-        if not origin:
-            return self.command == "GET"
-        prefix = f"http://{STATE.host}:{self.server.server_address[1]}"
-        localhost_prefix = f"http://localhost:{self.server.server_address[1]}"
-        return origin.startswith(prefix) or origin.startswith(localhost_prefix)
-
-    def _read_json_body(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length", "0"))
-        if length > MAX_BODY_BYTES:
-            raise ValueError("request body too large")
-        raw = self.rfile.read(length)
-        payload = json.loads(raw.decode("utf-8"))
-        if not isinstance(payload, dict):
-            raise ValueError("JSON body must be an object")
-        return payload
-
-    def _csrf_valid(self) -> bool:
-        cookie = ""
-        for part in self.headers.get("Cookie", "").split(";"):
-            part = part.strip()
-            if part.startswith(f"{CSRF_COOKIE}="):
-                cookie = part.split("=", 1)[1]
-        header = self.headers.get("X-CSRF-Token", "")
-        return bool(cookie) and secrets.compare_digest(cookie, header) and secrets.compare_digest(
-            cookie, self.csrf_token
-        )
-
-    def _send_html(self, status: HTTPStatus, body: str) -> None:
-        encoded = body.encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(encoded)))
-        self.send_header(
-            "Set-Cookie",
-            f"{CSRF_COOKIE}={self.csrf_token}; Path=/; HttpOnly; SameSite=Strict",
-        )
-        self.end_headers()
-        self.wfile.write(encoded)
-
-    def _send_json(self, status: HTTPStatus, payload: Any) -> None:
-        encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(encoded)))
-        self.end_headers()
-        self.wfile.write(encoded)
-
-    def do_GET(self) -> None:
-        if not self._validate_host():
-            self._send_json(HTTPStatus.FORBIDDEN, {"error": "invalid host"})
-            return
-        path = urlparse(self.path).path
-        if path in {"/", ""}:
-            self.send_response(HTTPStatus.TEMPORARY_REDIRECT)
-            self.send_header("Location", "/dashboard")
-            self.end_headers()
-            return
-        if path == "/dashboard":
-            self._send_html(HTTPStatus.OK, render_dashboard_html(self.csrf_token))
-            return
-        if path == "/settings":
-            self._send_html(HTTPStatus.OK, render_settings_html(self.csrf_token))
-            return
-        if path == "/api/settings":
-            self._send_json(HTTPStatus.OK, database.get_user_settings(DB_FILE))
-            return
-        if path == "/api/scan/status":
-            self._send_json(HTTPStatus.OK, get_scan_runner().snapshot())
-            return
-        if path == "/api/dashboard-data":
-            self._send_json(HTTPStatus.OK, scan_runner.dashboard_payload(DB_FILE))
-            return
-        self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
-
-    def do_PUT(self) -> None:
-        self._handle_settings_update()
-
-    def do_POST(self) -> None:
-        path = urlparse(self.path).path
-        if path == "/api/settings":
-            self._handle_settings_update()
-            return
-        if path == "/api/scan":
-            self._handle_scan_start()
-            return
-        self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
-
-    def _handle_scan_start(self) -> None:
-        if not self._validate_host() or not self._validate_origin():
-            self._send_json(HTTPStatus.FORBIDDEN, {"error": "invalid origin"})
-            return
-        if not self._csrf_valid():
-            self._send_json(HTTPStatus.FORBIDDEN, {"error": "invalid csrf token"})
-            return
-        started, payload = get_scan_runner().start()
-        if not started:
-            self._send_json(
-                HTTPStatus.CONFLICT,
-                {"error": payload.get("error", "scan busy"), "status": payload.get("status")},
-            )
-            return
-        self._send_json(HTTPStatus.ACCEPTED, {"status": payload})
-
-    def _handle_settings_update(self) -> None:
-        if not self._validate_host() or not self._validate_origin():
-            self._send_json(HTTPStatus.FORBIDDEN, {"error": "invalid origin"})
-            return
-        if not self._csrf_valid():
-            self._send_json(HTTPStatus.FORBIDDEN, {"error": "invalid csrf token"})
-            return
+async def _event_watcher() -> None:
+    last_scan: Optional[str] = None
+    last_db_mtime = -1
+    last_heartbeat = 0.0
+    while True:
+        status = get_scan_runner().snapshot()
+        fingerprint = json.dumps(status, sort_keys=True, default=str)
+        if fingerprint != last_scan:
+            event = "scan.progress"
+            if status["state"] == "succeeded":
+                event = "scan.completed"
+            elif status["state"] == "failed":
+                event = "scan.failed"
+            elif status["state"] == "running" and last_scan is None:
+                event = "scan.started"
+            await MANAGER.broadcast(event, status)
+            last_scan = fingerprint
         try:
-            payload = self._read_json_body()
-            email = payload.get("email", "")
-            scan_times = payload.get("scan_times", [])
-            if not isinstance(scan_times, list):
-                raise ValueError("scan_times must be an array")
-            saved = scheduler.apply_settings_with_rollback(
-                email,
-                scan_times,
-                ROOT,
-                Path.home(),
-                DATA_DIR,
-                DB_FILE,
-            )
-            self._send_json(HTTPStatus.OK, saved)
-        except (ValueError, json.JSONDecodeError) as exc:
-            self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-        except Exception as exc:
-            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+            db_mtime = DB_FILE.stat().st_mtime_ns
+        except OSError:
+            db_mtime = -1
+        if last_db_mtime >= 0 and db_mtime != last_db_mtime:
+            await MANAGER.broadcast("dashboard.updated", scan_runner.dashboard_payload(DB_FILE))
+        last_db_mtime = db_mtime
+        now = asyncio.get_running_loop().time()
+        if now - last_heartbeat >= 15:
+            await MANAGER.broadcast("heartbeat", {"timestamp": datetime.now(timezone.utc).isoformat()})
+            last_heartbeat = now
+        await asyncio.sleep(0.5)
 
 
 def start_local_server() -> int:
+    global CSRF_TOKEN
     with STATE.lock:
-        if STATE.httpd is not None:
+        if STATE.server is not None:
             return STATE.port
-        token = secrets.token_urlsafe(32)
-        httpd = ThreadingHTTPServer((STATE.host, 0), InterviewTrackerHandler)
-        httpd.csrf_token = token  # type: ignore[attr-defined]
-        port = httpd.server_address[1]
-        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-        thread.start()
-        STATE.httpd = httpd
-        STATE.thread = thread
+        CSRF_TOKEN = secrets.token_urlsafe(32)
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind((STATE.host, 0))
+        listener.listen(128)
+        port = listener.getsockname()[1]
         STATE.port = port
+        config = uvicorn.Config(APP, host=STATE.host, port=port, log_level="warning")
+        server = uvicorn.Server(config)
+        thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+        thread.start()
+        STATE.server = server
+        STATE.thread = thread
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         port_file().write_text(str(port), encoding="utf-8")
         database.set_metadata(database.HTTP_LISTEN_PORT_KEY, str(port), DB_FILE)
@@ -272,10 +390,11 @@ def start_local_server() -> int:
 
 def stop_local_server() -> None:
     with STATE.lock:
-        if STATE.httpd is not None:
-            STATE.httpd.shutdown()
-            STATE.httpd.server_close()
-            STATE.httpd = None
+        if STATE.server is not None:
+            STATE.server.should_exit = True
+            if STATE.thread:
+                STATE.thread.join(timeout=5)
+            STATE.server = None
             STATE.thread = None
             STATE.port = 0
 
